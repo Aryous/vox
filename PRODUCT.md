@@ -35,8 +35,10 @@ vox 是 TTS 领域的 LM Studio / OpenRouter：
 
 ## Capabilities and Constraints
 
-- 第一期（本地）：`kokoro`（Kokoro-82M-zh）、`qwen3`（Qwen3-TTS CustomVoice 1.7B 8bit）、`qwen3-design`（Qwen3-TTS VoiceDesign 1.7B 8bit）。
-- 第二期（云端，接口已预留）：OpenAI、ElevenLabs、MiniMax 等，API Key 从环境变量读取。
+- 本地：`kokoro`（Kokoro-82M-zh）、`qwen3`（Qwen3-TTS CustomVoice）、`qwen3-design`（VoiceDesign）；HuggingFace 上 Qwen3-TTS 的其他尺寸、量化版本可在线查到并下载，用同一引擎运行。
+- 云端：OpenRouter（聚合）+ 10 家 Provider（OpenAI、Inworld、ElevenLabs、Gemini、阿里百炼、火山豆包、MiniMax、阶跃、硅基流动、小米 MiMo）。Key 读环境变量或 `~/.config/vox/credentials.json`，环境变量优先。
+- 「能不能用」是系统事实（下没下载、连没连上），不做成开关；「我的模型」是用户在能用的模型里留下的那些，音色库、试音台、`/v1/models` 只用它们。
+- 数据与代码分开：模型元数据在 `vox/registry.json`（可在线更新），新模型优先来自各家在线列表；代码只负责怎么调用。
 - 模型能力各不相同（预置音色、情绪指令、声音设计、原生语速、随机种子），UI 与 CLI 按能力显示参数，不对不支持的参数撒谎。
 - 需要 Apple Silicon（MLX）和 ffmpeg；读音校对依赖本机 `coli asr`，缺失时降级提示。
 - 选角 / 批量合成属于工作流，保留在 CLI（`vox batch`），不进入 WebUI 主导航。
@@ -52,3 +54,4 @@ vox 是 TTS 领域的 LM Studio / OpenRouter：
 3. 按能力呈现：只显示当前模型真正支持的控制项。
 4. 可复现：每条结果记录完整请求（含种子），可复制为 CLI 命令或 API 请求。
 5. 人和 Agent 同等：每个页面的操作都有对应的 CLI / API 等价物，并在界面上可见。
+6. 不写死清单：能在线查到的（模型列表、音色、价格）就在线查，注册表只补接口给不了的信息，并作为离线兜底。

@@ -42,3 +42,11 @@
 6. **认证**：Bearer 占大多数；签名类（腾讯 TC3、火山音色列表、讯飞、Polly SigV4）成本高，放后面。
 
 原始调研全文见本次会话；各家官方文档链接见上表对应 Provider 的官网文档。
+
+
+## 补充（2026-09-24）：模型列表与 OpenRouter
+
+- **不用 Key 就能拿到模型列表的**只有聚合平台：OpenRouter（`GET /api/v1/models?output_modalities=speech`，带 `supported_voices` 和 `pricing`）和 HuggingFace（`/api/models` 搜索）。10 家厂商的列表接口都要 Key（实测无 Key 返回 401 / 403；ElevenLabs 返回匿名工作区不存在）。
+- **有 TTS 列表接口的厂商**：OpenAI、阶跃（`/v1/models`，无能力字段，按名字含 tts 识别）、硅基流动（`?type=audio`，再去掉语音识别模型）、ElevenLabs（`can_do_text_to_speech`）、Gemini（分页，按名字含 tts 识别）。阿里百炼、火山、MiniMax、小米、Inworld 查不到公开的 TTS 模型列表接口。
+- **OpenRouter 语音接口**：`POST /api/v1/audio/speech`，OpenAI 兼容；字段 model / input / voice / response_format（mp3 或 pcm，默认 pcm）/ speed（各家支持不一）/ provider（透传）；没有 instructions。TTS 按输入字符计费。文档 https://openrouter.ai/docs/guides/overview/multimodal/tts
+- 以上列表接口的过滤规则里，OpenAI / 阶跃 / Gemini 按名字识别是推断，拿到真 Key 后要核对。

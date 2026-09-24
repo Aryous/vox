@@ -255,7 +255,7 @@ def cmd_keys(a):
                 for c in p["credentials"] + p["optional"]:
                     st = f"已配置（{'环境变量' if c['source'] == 'env' else '配置文件'}{'，…' + c['last4'] if c['last4'] else ''}）" if c["configured"] else ("未配置" if c in p["credentials"] else "—")
                     print(f"{p['name']:<12} {c['env']:<24} {st}")
-                if not p["ready"]:
+                if not p["connected"]:
                     print(f"{'':<12} 申请：{p['console']}")
         return _out(a, ps, human)
     if not a.env:

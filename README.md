@@ -2,17 +2,18 @@
 
 本地 TTS 的统一入口：像 LM Studio 管理大模型一样管理 TTS 模型，像 OpenRouter 一样用一套接口调用它们。
 
-- **引擎层**：本地模型的下载、加载、卸载，外加 10 家云端 Provider；OpenAI 兼容的 `POST /v1/audio/speech`，任何 OpenAI 客户端改个 base URL 就能用。
+- **引擎层**：本地模型的发现、下载、加载、卸载，外加 OpenRouter 和 10 家云端 Provider；OpenAI 兼容的 `POST /v1/audio/speech`，任何 OpenAI 客户端改个 base URL 就能用。
 - **展示层**：音色库（所有模型的所有音色，读同一段样本，点开就听）、试音台（自由调参、A/B 对比、读音校对）。
 - **人和 Agent 同等**：CLI、HTTP、WebUI 用同一套模型 ID、音色引用和参数名；CLI 全部支持 `--json`，服务提供 `/llms.txt`。
 
 | 来源 | 模型 |
 | --- | --- |
-| 本地 | `local/qwen3`（Qwen3-TTS CustomVoice）、`local/qwen3-design`（VoiceDesign）、`local/kokoro` |
+| 本地 | `local/qwen3`（Qwen3-TTS CustomVoice）、`local/qwen3-design`（VoiceDesign）、`local/kokoro`；另可从 HuggingFace 查到 Qwen3-TTS 的 0.6B / 1.7B 各量化版本 |
+| 聚合 | OpenRouter：一个 Key 调用它的全部 TTS 模型（Fish Audio、MAI-Voice、Grok Voice、Deepgram Aura 等，列表在线获取） |
 | 海外云端 | OpenAI `gpt-4o-mini-tts` · Inworld `inworld-tts-2(-flash)` · ElevenLabs `eleven_v3` / `eleven_flash_v2_5` / `eleven_multilingual_v2` · Google `gemini-3.8-flash(-lite)-tts` |
 | 国内云端 | 阿里云百炼 `qwen-audio-3.0-tts-plus` / `cosyvoice-v3-flash` / `qwen3-tts(-instruct)-flash` · 火山豆包 `seed-tts-2.0` · MiniMax `speech-2.8-hd/turbo` · 阶跃 `stepaudio-3-tts` / `2.5` · 硅基流动 CosyVoice2 · 小米 `mimo-v2.5-tts(-voicedesign)` |
 
-`vox models` 列出全部模型与状态；各家接入细节与官方文档出处见 `docs/cloud-providers-2026-09.md`。
+`vox models` 列出我的模型，`vox models --all` 列出全部；各家接入细节与官方文档出处见 `docs/cloud-providers-2026-09.md`。
 
 ## 安装
 
@@ -20,7 +21,7 @@
 cd ~/Documents/Code/p-vox
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 ln -sf "$PWD/.venv/bin/vox" ~/.local/bin/vox
-vox pull qwen3        # 下载模型：默认走 ModelScope，逐个文件按 HuggingFace 哈希校验
+vox models add qwen3  # 下载模型：默认走 ModelScope，逐个文件按 HuggingFace 哈希校验
 vox serve --open      # http://127.0.0.1:8765
 ```
 
@@ -42,10 +43,11 @@ vox serve --open      # http://127.0.0.1:8765
 ## CLI
 
 ```bash
-vox models                         # 模型清单与状态（--json 给 Agent；-p gemini 只看一家）
-vox models fetch gemini            # 向 Provider 获取它现在提供的 TTS 模型
-vox models add gemini/<模型名>      # 加进清单；vox models off / on / rm <模型 ID> 停用、启用、删除
-vox pull qwen3-design              # 下载
+vox models                         # 我的模型（--all 含未下载 / 未连接的；-p gemini 只看一家；--json 给 Agent）
+vox models fetch openrouter        # 在线查询这家现在提供的模型（local = HuggingFace）
+vox models add qwen3-design        # 加进我的模型：本地 = 下载，云端 = 加入清单；没登记的写 provider/模型名
+vox models rm <模型 ID>             # 移出我的模型（本地要加 --delete-files，会删除模型文件）
+vox models update                  # 拉取新版模型注册表
 vox load qwen3 / vox unload qwen3  # 作用于运行中的服务
 vox voices -m qwen3 --gender 女    # 音色库
 vox sample qwen3:serena --play     # 试听音色样本
@@ -113,22 +115,31 @@ vox keys rm OPENAI_API_KEY
 
 ### Provider 与模型
 
-Provider 只管连接（Key、地址），模型是清单里的条目，两者分开管理。WebUI 的「模型」页左边是 Provider，右边是它的模型：
+Provider 只管连接（Key、地址），模型是另一回事。两件事分开判断：
 
-- vox 为每家预置了经过核对的模型（价格、能力、音色都已登记），默认启用；停用的模型不出现在音色库和试音台，但 API 仍可直接调用。
-- **获取模型列表**：OpenAI、阶跃、硅基流动、ElevenLabs、Gemini 有官方的模型列表接口，配好 Key 后可以查询这家现在提供的 TTS 模型，一键加进清单。阿里百炼、火山、MiniMax、小米、Inworld 没有公开的列表接口，用「手动添加」填模型 ID。
-- 新加的模型借用同一家预置模型的请求格式，只换模型名；能力按同家推断，价格需自行查看官网。清单设置保存在 `$VOX_HOME/models.json`。
+- **能不能用**是系统事实，不给开关：本地模型下没下载、云端 Provider 连没连上（有没有 Key）。
+- **我的模型**是用户选择：能用的模型里你留下的那些。音色库、试音台、`/v1/models` 只用它们。
+  - 本地：下载了就在我的模型里；移除 = 删除模型文件（WebUI 原地二次确认，CLI 要 `--delete-files`）。
+  - 云端：连接后默认带上注册表推荐的模型；再从在线列表添加、手动填模型 ID，或移除。
+- **可添加**的模型来自在线列表：OpenAI、阶跃、硅基流动、ElevenLabs、Gemini 用各家的列表接口（要 Key），OpenRouter 和 HuggingFace 是公开接口（不用 Key 也能浏览）。阿里百炼、火山、MiniMax、小米、Inworld 没有公开的列表接口，只能手动填 ID。
+- 注册表里没有的模型，借用同一家已核对模型的请求格式，只换模型名；界面上标「能力推断」，价格请看官网。
+
+### 数据与代码分开
+
+- **代码**（`vox/providers/`、`vox/engines.py`）只负责怎么调用：每家的请求怎么拼、响应怎么解析。
+- **数据**（`vox/registry.json`）负责有什么：Provider 的连接方式与适配器配置、核对过的模型元数据（能力、价格、音色）。它随包发布，`vox models update` 可以拉新版（日期更新才生效；需要这个版本没有的适配器时提示升级 vox）。默认地址是本仓库的 `vox/registry.json`，可用 `VOX_REGISTRY_URL` 改。
+- 在线列表的结果缓存在 `$VOX_HOME/discovered/`，我的模型记在 `$VOX_HOME/models.json`。
 
 ### 新增一家 Provider
 
-1. `vox/providers/` 下写一个 `CloudEngine` 子类，实现 `synth(req) -> (音频字节, 格式)`，可选 `fetch_voices()`、`list_models()`；OpenAI 兼容的直接用 `openai_compat`，只写配置。
-2. 在 `vox/catalog.py` 的 `PROVIDERS` 登记凭证、控制台、文档、图标；在 `vox/cloud_catalog.py` 登记模型、能力、价格、静态音色。
+1. `vox/providers/` 下写一个 `CloudEngine` 子类，实现 `synth(req) -> (音频字节, 格式)`，可选 `fetch_voices()`；OpenAI 兼容的直接用 `openai_compat`，只写配置。在线列表的新查询方式加在 `vox/discovery.py`。
+2. 在 `vox/registry.json` 的 `providers` 登记凭证、控制台、文档、图标、适配器配置，以及在线列表怎么查（`discover`）；在 `models` 登记核对过的模型、能力、价格、静态音色（`voice_sets`）。
 3. 在 `tests/test_providers.py` 按官方示例加一条离线测试。CLI、HTTP、WebUI 不需要改。
 
 ## 测试
 
 ```bash
-.venv/bin/python tests/test_providers.py   # 24 项离线测试：拦截网络，按官方示例验证每家请求与响应解析
+.venv/bin/python tests/test_providers.py   # 31 项离线测试（约 1 秒）：拦截网络，按官方示例验证每家请求与响应解析、在线发现、我的模型、注册表更新
 ```
 
 ## 致谢
@@ -137,6 +148,6 @@ Provider 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（M
 
 ## 数据与卸载
 
-数据都在 `$VOX_HOME`（默认 `~/.cache/vox`）：`models/` 模型、`clips/` 合成结果、`samples/` 音色样本、`history.json`、`my_voices.json`、`settings.json`、`models.json`。Kokoro 模型在 `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M-v1.1-zh`。
+数据都在 `$VOX_HOME`（默认 `~/.cache/vox`）：`models/` 模型、`clips/` 合成结果、`samples/` 音色样本、`history.json`、`my_voices.json`、`settings.json`、`models.json`（我的模型）、`discovered/`（在线列表缓存）、`voices/`（云端音色列表缓存）。Kokoro 模型在 `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M-v1.1-zh`。
 
 卸载：删除本目录、`~/.local/bin/vox`，以及上面两个数据目录。
