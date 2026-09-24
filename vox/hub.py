@@ -7,7 +7,9 @@
   history.json      合成历史（CLI / WebUI / API 共享）
   my_voices.json    自定义音色（模型 + 音色 + 指令 + 种子的组合）
   settings.json     设置（样本文本等）
-  models.json       模型清单的个人设置：停用了哪些、手动添加 / 从 Provider 获取了哪些
+  models.json       我的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
+  discovered/       各 Provider 在线模型列表的缓存
+  registry.json     vox models update 拉到的新版注册表
 """
 from __future__ import annotations
 
@@ -17,16 +19,17 @@ import os
 import re
 import shutil
 import subprocess
-import copy
 import threading
 import time
 from pathlib import Path
 
-from . import audio, catalog, credentials, engines, fetch, providers
+from . import audio, catalog, credentials, discovery, engines, fetch, providers
 
 HOME = engines.CACHE
 CLIPS, SAMPLES = HOME / "clips", HOME / "samples"
-HIST, MYV, SETTINGS, MPREFS = HOME / "history.json", HOME / "my_voices.json", HOME / "settings.json", HOME / "models.json"
+HIST, MYV, SETTINGS = HOME / "history.json", HOME / "my_voices.json", HOME / "settings.json"
+MPREFS = catalog.PREFS
+REGISTRY_URL = os.environ.get("VOX_REGISTRY_URL", "https://raw.githubusercontent.com/Aryous/vox/main/vox/registry.json")
 REQ_KEYS = ("model", "input", "voice", "instructions", "speed", "lang", "seed", *catalog.GEN)
 SYNTH_LOCK = threading.RLock()   # MLX 不是线程安全的：合成与加载串行
 FILE_LOCK = threading.Lock()
@@ -87,19 +90,27 @@ _migrate()
 
 
 # ---------- 模型 ----------
+# 「能不能用」是系统事实：本地模型下没下载、云端 Provider 连没连上（有没有 Key），不让用户开关。
+# 「想不想用」是用户选择：我的模型 = 能用的模型里，用户留下的那些。
+#   本地：下载了就在「我的模型」里，移除即删除文件。
+#   云端：连接 Provider 后，默认带上注册表推荐的模型；用户可以从在线列表添加更多、手动填模型 ID，或移除。
 def model_or_raise(mid: str) -> dict:
     m = catalog.find_model(mid)
     if not m:
-        raise VoxError(f"未知模型「{mid}」。可用：{', '.join(x['id'] for x in catalog.MODELS)}")
+        mine = [x["id"] for x in catalog.MODELS if is_mine(x)]
+        raise VoxError(f"未知模型「{mid}」。我的模型：{', '.join(mine) or '（空）'}；全部可用模型见 vox models --all")
     return m
 
 
+def connected(pid: str) -> bool:
+    p = catalog.PROVIDERS.get(pid) or {}
+    return p.get("kind") == "local" or bool(p) and all(credentials.get(c["env"]) for c in p.get("credentials", []))
+
+
 def model_status(m: dict) -> str:
-    if m.get("status") == "planned":
-        return "planned"
     if m["provider"] != "local":
-        return "ready" if providers.engine_for(m).is_ready() else "needs_key"
-    e = engines.get(m["engine"])
+        return "ready" if connected(m["provider"]) else "needs_key"
+    e = engines.get(m)
     if e.is_loaded():
         return "loaded"
     if PULLS.get(m["id"], {}).get("state") == "running":
@@ -107,104 +118,155 @@ def model_status(m: dict) -> str:
     return "ready" if e.is_ready() else "not_downloaded"
 
 
-def models(provider: str | None = None) -> list[dict]:
-    off = set(_prefs()["disabled"])
+def usable(m: dict | None) -> bool:
+    return bool(m) and model_status(m) in ("ready", "loaded")
+
+
+def _prefs() -> dict:
+    d = _load(MPREFS, {})
+    return {"mine": d.get("mine", {}), "custom": d.get("custom", [])}
+
+
+def _saved(pid: str, pr: dict | None = None) -> list[str]:
+    """用户在这家留下的模型 ID；从没改过时 = 注册表推荐的模型。"""
+    pr = pr or _prefs()
+    if pid in pr["mine"]:
+        return pr["mine"][pid]
+    return [m["id"] for m in catalog.MODELS if m["provider"] == pid and m.get("recommended")]
+
+
+def is_mine(m: dict) -> bool:
+    if m["provider"] == "local":
+        return model_status(m) in ("ready", "loaded", "downloading")
+    return connected(m["provider"]) and m["id"] in _saved(m["provider"])
+
+
+def models(provider: str | None = None, mine: bool | None = None) -> list[dict]:
+    pr = _prefs()
+    saved = {pid: set(_saved(pid, pr)) for pid in catalog.PROVIDERS}
     out = []
     for m in catalog.MODELS:
         if provider and m["provider"] != provider:
             continue
+        st = model_status(m)
+        local = m["provider"] == "local"
         d = {k: v for k, v in m.items() if k not in ("engine", "voices", "compat")}
-        d["status"] = model_status(m)
-        d["enabled"] = m["id"] not in off
-        d["provider_name"] = catalog.PROVIDERS[m["provider"]]["name"]
-        d["voice_count"] = len(voices(model=m["id"], with_samples=False)) if m["caps"].get("voices") else None
+        d.update(status=st, saved=local and st != "not_downloaded" or m["id"] in saved[m["provider"]],
+                 provider_name=catalog.PROVIDERS[m["provider"]]["name"])
+        d["mine"] = st in ("ready", "loaded", "downloading") if local else st == "ready" and d["saved"]
+        if mine is not None and d["mine"] != mine:
+            continue
+        vs = m.get("voices")
+        d["voice_count"] = (len(vs) if isinstance(vs, list) else None) if m["caps"].get("voices") else None
         out.append(d)
     return out
 
 
-# ---------- 模型清单：Provider 与模型解耦 ----------
-# Provider 只管连接（凭证、地址）；模型是清单里的条目，可以启用 / 停用，也可以从 Provider 获取更多、或手动添加。
-# 新增的模型借用同一家已登记模型的适配器配置（同一家的请求格式相同），只换 remote 模型名；能力按同家推断。
-def _prefs() -> dict:
-    return {"disabled": [], "custom": [], **_load(MPREFS, {})}
+def _set_saved(pid: str, ids: list[str]):
+    pr = _prefs()
+    pr["mine"][pid] = list(dict.fromkeys(ids))
+    _save(MPREFS, pr)
 
 
-def _template(provider: str) -> dict:
-    for m in catalog.MODELS:
-        if m["provider"] == provider and not m.get("custom"):
-            return m
-    raise VoxError(f"{provider} 没有可借用的模型模板，不能添加")
-
-
-def _custom_model(c: dict) -> dict:
-    t = _template(c["provider"])
-    m = copy.deepcopy(t)
-    m.update({"id": f"{c['provider']}/{c['remote']}", "remote": c["remote"], "name": c.get("name") or c["remote"], "custom": True,
-              "about": c.get("about") or f"从 {catalog.PROVIDERS[c['provider']]['name']} 获取的模型；请求格式与能力按同家的「{t['name']}」推断。",
-              "price": None, "homepage": None})
-    m.pop("alias", None)
-    return m
-
-
-def _register_customs():
-    known = {m["id"] for m in catalog.MODELS}
-    for c in _prefs()["custom"]:
-        if c.get("provider") in catalog.PROVIDERS and f"{c['provider']}/{c['remote']}" not in known:
-            catalog.MODELS.append(_custom_model(c))
-
-
-def discover(provider: str) -> list[dict]:
-    """向 Provider 查询它现在提供的 TTS 模型，并标出清单里已有的。"""
-    p = catalog.PROVIDERS.get(provider)
-    if not p or p["kind"] != "cloud":
-        raise VoxError(f"未知的云端 Provider「{provider}」")
-    e = providers.engine_for(_template(provider))
-    if not e.can_list_models:
-        raise VoxError(f"{p['name']} 没有公开的模型列表接口，只能手动添加模型 ID")
-    if not e.is_ready():
-        raise VoxError(f"先配置 {p['name']} 的 Key，再获取模型")
-    have = {m["remote"]: m["id"] for m in catalog.MODELS if m["provider"] == provider}
-    return [{**r, "provider": provider, "id": have.get(r["remote"], f"{provider}/{r['remote']}"), "added": r["remote"] in have} for r in e.list_models()]
-
-
-def add_model(provider: str, remote: str, name: str | None = None) -> dict:
-    remote = remote.strip()
-    if provider not in catalog.PROVIDERS or catalog.PROVIDERS[provider]["kind"] != "cloud":
-        raise VoxError(f"未知的云端 Provider「{provider}」")
-    if not remote or "/" in remote and provider != "siliconflow":
-        raise VoxError("模型 ID 不能为空，也不要带 Provider 前缀（例如填 tts-1，而不是 openai/tts-1）")
-    mid = f"{provider}/{remote}"
+def add_model(mid: str | None = None, provider: str | None = None, remote: str | None = None, name: str | None = None) -> dict:
+    """加进「我的模型」。本地模型 = 开始下载；云端已知模型 = 加入清单；云端未知模型 ID = 作为手动添加的条目登记。"""
+    m = catalog.find_model(mid) if mid else None
+    if not m and provider and remote:
+        m = catalog.find_model(f"{provider}/{remote.strip()}")
+    if m and m["provider"] == "local":
+        return pull(m["id"], background=True)
+    if not m:
+        provider, remote = provider or (mid or "").split("/", 1)[0], (remote or (mid or "").split("/", 1)[-1]).strip()
+        p = catalog.PROVIDERS.get(provider)
+        if not p or p["kind"] != "cloud":
+            raise VoxError(f"未知模型「{mid or remote}」；手动添加云端模型请写成 provider/模型名，例如 openai/tts-1")
+        if not remote or remote == provider:
+            raise VoxError("模型名不能为空")
+        if not p.get("adapter"):
+            raise VoxError(f"{p['name']} 没有配置适配器，不能手动添加")
+        if not connected(provider):
+            raise VoxError(f"先连接 {p['name']}（填 Key），再添加它的模型")
+        with FILE_LOCK:
+            pr = _prefs()
+            pr["custom"] = [c for c in pr["custom"] if not (c["provider"] == provider and c["remote"] == remote)]
+            pr["custom"].append({"provider": provider, "remote": remote, **({"name": name} if name else {})})
+            _save(MPREFS, pr)
+        catalog.rebuild()
+        m = catalog.find_model(f"{provider}/{remote}")
+    if not connected(m["provider"]):
+        raise VoxError(f"先连接 {catalog.PROVIDERS[m['provider']]['name']}（填 Key），再添加它的模型")
     with FILE_LOCK:
-        pr = _prefs()
-        if not any(m["id"] == mid for m in catalog.MODELS):
-            c = {"provider": provider, "remote": remote, **({"name": name} if name else {})}
-            catalog.MODELS.append(_custom_model(c))
-            pr["custom"].append(c)
-        pr["disabled"] = [x for x in pr["disabled"] if x != mid]
-        _save(MPREFS, pr)
-    return {"model": mid, "enabled": True}
+        _set_saved(m["provider"], _saved(m["provider"]) + [m["id"]])
+    return {"model": m["id"], "mine": True}
 
 
-def remove_model(mid: str) -> dict:
+def remove_model(mid: str, delete_files: bool = False) -> dict:
+    """移出「我的模型」。本地模型要删除已下载的文件，必须显式确认（delete_files）。"""
     m = model_or_raise(mid)
-    if not m.get("custom"):
-        raise VoxError(f"{m['id']} 是内置模型，不能删除，可以停用：vox models off {m['id']}")
+    if m["provider"] == "local":
+        e = engines.get(m)
+        path = e.local_path()
+        if not delete_files:
+            raise VoxError(f"移除本地模型会删除已下载的文件 {path}（{m.get('size_gb') or '?'} GB）。确认请加 --delete-files")
+        if PULLS.get(m["id"], {}).get("state") == "running":
+            raise VoxError("正在下载，等下载结束再删除")
+        allowed = (fetch.ROOT.resolve(), (Path.home() / ".cache" / "huggingface" / "hub").resolve())
+        rp = path.resolve()
+        if not any(rp != root and root in rp.parents for root in allowed):
+            raise VoxError(f"模型文件不在 vox 管理的目录里，不自动删除：{path}")
+        with SYNTH_LOCK:
+            engines.unload(m["id"])
+            shutil.rmtree(rp, ignore_errors=True)
+        return {"model": m["id"], "mine": False, "deleted": str(path)}
     with FILE_LOCK:
-        pr = _prefs()
-        pr["custom"] = [c for c in pr["custom"] if f"{c['provider']}/{c['remote']}" != m["id"]]
-        pr["disabled"] = [x for x in pr["disabled"] if x != m["id"]]
-        _save(MPREFS, pr)
-        catalog.MODELS.remove(m)
-    return {"model": m["id"], "removed": True}
+        _set_saved(m["provider"], [x for x in _saved(m["provider"]) if x != m["id"]])
+        if m["source"] == "custom":
+            pr = _prefs()
+            pr["custom"] = [c for c in pr["custom"] if f"{c['provider']}/{c['remote']}" != m["id"]]
+            _save(MPREFS, pr)
+    if m["source"] == "custom":
+        catalog.rebuild()
+    return {"model": m["id"], "mine": False}
 
 
-def set_enabled(mid: str, on: bool) -> dict:
-    m = model_or_raise(mid)
-    with FILE_LOCK:
-        pr = _prefs()
-        pr["disabled"] = [x for x in pr["disabled"] if x != m["id"]] + ([] if on else [m["id"]])
-        _save(MPREFS, pr)
-    return {"model": m["id"], "enabled": on}
+def discover(provider: str) -> dict:
+    """向 Provider（本地为 HuggingFace）查询现在提供的 TTS 模型，结果并进目录，返回这家的全部模型。"""
+    if provider not in catalog.PROVIDERS:
+        raise VoxError(f"未知的 Provider「{provider}」")
+    try:
+        res = discovery.run(provider)
+    except providers.ProviderError as e:
+        raise VoxError(str(e)) from None
+    providers.reset()
+    return {"provider": provider, "fetched": res["fetched"], "found": len(res["items"]), "models": models(provider)}
+
+
+def registry_info() -> dict:
+    r = catalog.REG
+    return {"updated": r.get("updated"), "from": r.get("_from"), "url": REGISTRY_URL,
+            "providers": len(catalog.PROVIDERS), "models": sum(1 for m in catalog.MODELS if m["source"] == "registry")}
+
+
+def registry_update(url: str | None = None) -> dict:
+    """拉取新版注册表；日期比当前新才生效。注册表只是数据，不含代码。"""
+    url = url or REGISTRY_URL
+    try:
+        _, _, body = providers.base.http("GET", url, timeout=30)
+        reg = json.loads(body)
+    except (providers.ProviderError, ValueError) as e:
+        raise VoxError(f"拉取注册表失败（{url}）：{e}") from None
+    if not catalog.valid(reg):
+        raise VoxError("拉到的文件不是 vox 注册表（schema 不对）")
+    unknown = sorted({p.get("adapter") for p in reg["providers"].values() if p.get("kind") == "cloud"} - set(providers.ADAPTERS))
+    if unknown:
+        raise VoxError(f"新注册表需要这个版本没有的适配器：{', '.join(unknown)}。请先升级 vox")
+    cur = catalog.REG.get("updated", "")
+    if str(reg.get("updated", "")) <= str(cur):
+        return {**registry_info(), "changed": False}
+    _save(catalog.UPDATED, reg)
+    catalog.rebuild()
+    providers.reset()
+    return {**registry_info(), "changed": True}
 
 
 def _engine(m: dict):
@@ -212,11 +274,11 @@ def _engine(m: dict):
         e = providers.engine_for(m)
         if not e.is_ready():
             p = catalog.PROVIDERS[m["provider"]]
-            raise VoxError(f"{p['name']} 还没配置 Key：vox keys set {m['key_env']}，或在 WebUI「模型」页选中这家后粘贴（申请地址 {p['console']}）")
+            raise VoxError(f"{p['name']} 还没连接：vox keys set {m['key_env']}，或在 WebUI「模型」页选中这家后填 Key（申请地址 {p['console']}）")
         return e
-    e = engines.get(m["engine"])
+    e = engines.get(m)
     if not e.is_ready():
-        raise VoxError(f"模型 {m['id']} 还没下载：vox pull {catalog.short(m)}（约 {m.get('size_gb', '?')} GB）")
+        raise VoxError(f"模型 {m['id']} 还没下载：vox models add {catalog.short(m)}（约 {m.get('size_gb') or '?'} GB）")
     return e
 
 
@@ -232,8 +294,21 @@ def load(mid: str) -> dict:
 def unload(mid: str) -> dict:
     m = model_or_raise(mid)
     with SYNTH_LOCK:
-        engines.unload(m["engine"])
+        engines.unload(m["id"])
     return {"model": m["id"], "status": model_status(m)}
+
+
+def _keep_local(m: dict):
+    """在线查到的本地模型一旦下载，就登记进 models.json，之后在线列表变了也还认得它。"""
+    if m["source"] != "discovered":
+        return
+    keep = ("id", "alias", "repo", "name", "params_b", "quant", "size_gb", "homepage", "about")
+    tpl = next((r["template"] for r in (discovery.cached("local") or {}).get("items", []) if r.get("id") == m["id"]), None)
+    with FILE_LOCK:
+        pr = _prefs()
+        if not any(c.get("id") == m["id"] for c in pr["custom"]):
+            pr["custom"].append({"provider": "local", "template": tpl, **{k: m.get(k) for k in keep}})
+            _save(MPREFS, pr)
 
 
 def pull(mid: str, background=False, source="modelscope") -> dict:
@@ -242,6 +317,7 @@ def pull(mid: str, background=False, source="modelscope") -> dict:
         raise VoxError("云端模型无需下载")
     if m["engine"] == "kokoro":
         raise VoxError("Kokoro 首次合成时会自动下载（约 330 MB）")
+    _keep_local(m)
 
     def run():
         PULLS[m["id"]] = {"state": "running", "error": None, "started": time.time()}
@@ -267,7 +343,7 @@ def pull_status(mid: str) -> dict:
     d = fetch.local_dir(m["repo"]) if m.get("repo") else None
     done = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d and d.exists() else 0
     man = _load(d / ".vox-manifest.json", []) if d else []
-    total = sum(x.get("size", 0) for x in man if x.get("type") == "file") or int(m.get("size_gb", 0) * 1e9)
+    total = sum(x.get("size", 0) for x in man if x.get("type") == "file") or int((m.get("size_gb") or 0) * 1e9)
     return {"model": m["id"], **{k: v for k, v in st.items() if k != "started"}, "done": done, "total": total}
 
 
@@ -287,31 +363,29 @@ def _sample_key(ref: str, req: dict) -> str:
 
 
 def voices(model: str | None = None, lang: str | None = None, gender: str | None = None, q: str | None = None, with_samples=True) -> list[dict]:
+    """音色库：默认只列「我的模型」的音色；指定 model 时列这个模型的全部音色（添加前也能看）。"""
     out = []
-    off = set(_prefs()["disabled"]) if not model else set()
+    target = catalog.find_model(model) if model else None
+    if model and not target:
+        raise VoxError(f"未知模型「{model}」")
     for m in catalog.MODELS:
-        if m["provider"] != "local" or m["id"] in off or (model and m is not catalog.find_model(model)):
+        if (target and m is not target) or (not target and not is_mine(m)) or not m["caps"].get("voices"):
             continue
         sm = catalog.short(m)
-        if m["engine"] == "qwen3":
-            for vid, name, g, lg, desc in catalog.QWEN3_VOICES:
-                out.append({"ref": f"{sm}:{vid}", "model": m["id"], "voice": vid, "name": name, "gender": g, "lang": lg, "description": desc, "kind": "preset"})
-        elif m["engine"] == "kokoro":
-            try:
-                vs = engines.get("kokoro").voices()
-            except Exception:
-                vs = []
-            for vid in vs:
-                g = "女" if vid.startswith("zf_") else "男"
-                out.append({"ref": f"{sm}:{vid}", "model": m["id"], "voice": vid, "name": f"{g}声 {vid[3:]}", "gender": g, "lang": "中文", "description": f"Kokoro 中文{g}声 #{vid[3:]}", "kind": "preset"})
-    off = set(_prefs()["disabled"]) if not model else set()
-    for m in catalog.MODELS:  # 云端：有 Key 时用在线音色列表（缓存一天），否则用目录里的静态音色；停用的模型不进音色库
-        if m["provider"] == "local" or not m["caps"].get("voices") or m["id"] in off or (model and m is not catalog.find_model(model)):
-            continue
-        sm = catalog.short(m)
-        for v in providers.engine_for(m).voices():
+        if m["provider"] == "local":
+            vs = m.get("voices")
+            if vs == "engine":   # Kokoro：音色清单来自模型仓库
+                try:
+                    ids = engines.get(m).voices()
+                except Exception:
+                    ids = []
+                vs = [{"voice": vid, "name": f"{'女' if vid.startswith('zf_') else '男'}声 {vid[3:]}", "gender": "女" if vid.startswith("zf_") else "男",
+                       "lang": "中文", "description": f"Kokoro 中文{'女' if vid.startswith('zf_') else '男'}声 #{vid[3:]}"} for vid in ids]
+        else:   # 云端：有 Key 时用在线音色列表（缓存一天），否则用注册表里的静态音色
+            vs = providers.engine_for(m).voices()
+        for v in vs or []:
             out.append({"ref": f"{sm}:{v['voice']}", "model": m["id"], "voice": v["voice"], "name": v.get("name") or v["voice"], "gender": v.get("gender", ""),
-                        "lang": v.get("lang", ""), "description": v.get("description", ""), "kind": "preset", "cloud": True})
+                        "lang": v.get("lang", ""), "description": v.get("description", ""), "kind": "preset", "cloud": m["provider"] != "local"})
     for v in my_voices():
         m = catalog.find_model(v.get("model", ""))
         if model and m is not catalog.find_model(model):
@@ -331,7 +405,7 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
             req = _sample_request(v, text)
             f = SAMPLES / f"{_sample_key(v['ref'], req)}.wav"
             v["sample"] = {"url": f"/samples/{f.name}", "cached": f.exists()}
-            v["ready"] = model_status(catalog.find_model(v["model"])) in ("ready", "loaded") if catalog.find_model(v["model"] or "") else False
+            v["ready"] = usable(catalog.find_model(v["model"] or ""))
     return out
 
 
@@ -530,24 +604,24 @@ def status() -> dict:
     from . import __version__
 
     return {"version": __version__, "uptime": round(time.time() - START), "memory_bytes": rss,
-            "loaded": [catalog.find_model("local/" + n)["id"] for n in engines.loaded()],
+            "loaded": engines.loaded(),
             "asr": bool(shutil.which("coli")), "ffmpeg": bool(shutil.which("ffmpeg")), "home": str(HOME)}
 
 
 # ---------- Provider 与凭证 ----------
 def provider_list() -> list[dict]:
-    """Provider 列表与凭证状态（只给是否配置、来源、末 4 位，绝不返回凭证本身）。"""
-    off = set(_prefs()["disabled"])
+    """Provider 列表与连接状态（凭证只给是否配置、来源、末 4 位，绝不返回凭证本身）。"""
     out = []
     for pid, p in catalog.PROVIDERS.items():
-        ms = [m for m in catalog.MODELS if m["provider"] == pid]
-        cloud = p["kind"] == "cloud"
-        out.append({"id": pid, **{k: v for k, v in p.items() if k not in ("credentials", "optional")},
-                    "credentials": [{**c, **credentials.status(c["env"])} for c in p.get("credentials", [])],
-                    "optional": [{**c, **credentials.status(c["env"])} for c in p.get("optional", [])],
-                    "ready": all(credentials.get(c["env"]) for c in p.get("credentials", [])) if cloud else True,
-                    "can_list_models": cloud and bool(ms) and providers.engine_for(ms[0]).can_list_models,
-                    "models": [m["id"] for m in ms], "enabled": [m["id"] for m in ms if m["id"] not in off]})
+        ms = models(pid)
+        d = discovery.supported(pid)
+        c = discovery.cached(pid) if d else None
+        out.append({"id": pid, **{k: v for k, v in p.items() if k not in ("credentials", "optional", "compat", "model_defaults", "discover")},
+                    "credentials": [{**c_, **credentials.status(c_["env"])} for c_ in p.get("credentials", [])],
+                    "optional": [{**c_, **credentials.status(c_["env"])} for c_ in p.get("optional", [])],
+                    "connected": connected(pid),
+                    "discover": {"public": bool(d.get("public")), "note": d.get("note"), "fetched": c and c.get("fetched")} if d else None,
+                    "count": len(ms), "mine": sum(1 for m in ms if m["mine"])})
     return out
 
 
@@ -576,6 +650,3 @@ def refresh_voices(mid: str) -> int:
     if m["provider"] == "local":
         return len(voices(model=m["id"], with_samples=False))
     return len(providers.engine_for(m).voices(refresh=True))
-
-
-_register_customs()

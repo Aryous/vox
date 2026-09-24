@@ -1,16 +1,14 @@
 """OpenAI 兼容适配器：POST {base}/audio/speech，返回裸音频。
-一份代码覆盖 OpenAI、Inworld、阶跃星辰、硅基流动；差异都写在目录里模型的 `compat` 配置中：
+一份代码覆盖 OpenAI、Inworld、阶跃星辰、硅基流动、OpenRouter；差异都写在注册表的 `compat` 配置中：
 
   base            默认 base URL（可用 <PROVIDER>_BASE_URL 环境变量覆盖，如接代理或国际站）
   auth            Authorization 前缀，默认 Bearer
   instructions    指令怎么传："instructions" / "instruction"（阶跃，单数）/ "prefix"（硅基：写进 input，
                   `指令<|endofprompt|>正文`）/ None（不支持）
   english_only    指令必须英文（Inworld）
-  speed           (最小, 最大)，超出按边界裁剪
+  speed           [最小, 最大]，超出按边界裁剪；null 表示不传 speed，改由 ffmpeg 变速（OpenRouter：各家支持不一）
   voice_prefix    音色要带模型前缀（硅基：FunAudioLLM/CosyVoice2-0.5B:alex）
   extra           每次请求附加的固定字段
-  list_models     GET {base}/models 的查询参数与过滤：match 模型名须包含的词，exclude 要排除的词（如语音识别模型）
-                  （OpenAI / 阶跃的列表没有能力字段，只能按名字认 TTS；硅基用 type=audio，再去掉识别模型）
 """
 from __future__ import annotations
 
@@ -24,8 +22,6 @@ CJK = re.compile(r"[㐀-鿿぀-ヿ가-힯]")
 
 
 class OpenAICompat(CloudEngine):
-    native_speed = True
-
     def __init__(self, model):
         super().__init__(model)
         self.c = model["compat"]
@@ -55,19 +51,8 @@ class OpenAICompat(CloudEngine):
         return None
 
     @property
-    def can_list_models(self):
-        return bool(self.c.get("list_models"))
-
-    def list_models(self):
-        lm = self.c.get("list_models") or {}
-        _, _, raw = http("GET", f"{self.base}/models{lm.get('query', '')}", self._h(), timeout=30)
-        out = []
-        for d in json.loads(raw).get("data", []):
-            mid, low = d.get("id", ""), d.get("id", "").lower()
-            if (lm.get("match") and lm["match"] not in low) or any(x in low for x in lm.get("exclude", ())):
-                continue
-            out.append({"remote": mid, "name": mid, "description": d.get("owned_by", "")})
-        return sorted(out, key=lambda r: r["remote"])
+    def native_speed(self):
+        return self.c.get("speed", (0.25, 4)) is not None
 
     def synth(self, req):
         c, text = self.c, req["input"]
@@ -84,7 +69,9 @@ class OpenAICompat(CloudEngine):
             elif mode:
                 body[mode] = instr
         body["input"] = text
-        if float(req.get("speed", 1)) != 1:
+        if not body.get("voice"):
+            body.pop("voice")   # 有的模型没有预置音色（如 OpenRouter 上的 Fish Audio），不传由 Provider 用默认
+        if float(req.get("speed", 1)) != 1 and self.native_speed:
             lo, hi = c.get("speed", (0.25, 4))
             body["speed"] = clamp(float(req["speed"]), lo, hi)
         _, headers, audio = http("POST", f"{self.base}/audio/speech", self._h(), body)

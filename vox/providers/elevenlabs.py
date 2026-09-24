@@ -43,14 +43,6 @@ class ElevenLabs(CloudEngine):
                 break
         return out
 
-    can_list_models = True
-
-    def list_models(self):
-        # https://elevenlabs.io/docs/api-reference/models/list：裸数组，can_do_text_to_speech 标出 TTS 模型
-        _, _, body = http("GET", f"{BASE}/v1/models", self._h(), timeout=30)
-        return [{"remote": m["model_id"], "name": m.get("name") or m["model_id"], "description": (m.get("description") or "")[:120]}
-                for m in json.loads(body) if m.get("can_do_text_to_speech")]
-
     def synth(self, req):
         voice = req.get("voice")
         if not voice:

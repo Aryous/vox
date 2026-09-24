@@ -3,8 +3,6 @@
 每个适配器实现：
   synth(req) -> (音频字节, 格式)   req 是网关统一请求（model/input/voice/instructions/speed/seed/lang…）
   fetch_voices() -> list[dict]     可选：从 Provider 拉音色列表（结果缓存一天）
-  list_models() -> list[dict]      可选：向 Provider 查询它提供的 TTS 模型（[{remote, name, description}]），
-                                   同时把 can_list_models 设为 True
 """
 from __future__ import annotations
 
@@ -123,12 +121,6 @@ class CloudEngine:
             except ProviderError:
                 pass
         return self.static_voices()
-
-    # ---- 模型列表 ----
-    can_list_models = False
-
-    def list_models(self) -> list[dict]:
-        raise ProviderError("这家没有公开的模型列表接口")
 
     # ---- 合成 ----
     def synth(self, req: dict) -> tuple[bytes, str]:

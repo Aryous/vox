@@ -3,6 +3,7 @@
 拦截每个适配器的 http()，按各家官方文档的请求 / 响应格式造数据，检查：
   1. 请求：URL、认证头、请求体字段名（文本、音色、指令、语速、种子）是否与官方文档一致
   2. 响应：裸字节 / base64 / hex / 临时 URL / 分块流 能否解析并最终落成可播放的 wav
+  3. 模型清单：在线发现（各家列表接口、OpenRouter、HuggingFace）、我的模型的添加 / 移除、注册表更新
 运行：.venv/bin/python -m pytest tests -q   或   .venv/bin/python tests/test_providers.py
 """
 from __future__ import annotations
@@ -20,8 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TMP = Path(tempfile.mkdtemp(prefix="vox-test-"))
 os.environ["VOX_CONFIG"] = str(TMP / "cfg")          # 凭证写到临时目录，不碰真实配置
 os.environ["VOX_HOME"] = str(TMP / "home")
+(TMP / "home").mkdir()
+(TMP / "home" / "kokoro-voices.json").write_text('["zf_001", "zm_010"]')   # Kokoro 音色清单平时联网取一次，测试里预置，保持离线
 
-from vox import audio, catalog, credentials, hub  # noqa: E402
+from vox import audio, catalog, credentials, discovery, fetch, hub  # noqa: E402
+from vox.providers import base  # noqa: E402
 from vox.providers import engine_for  # noqa: E402
 from vox.providers import (dashscope, elevenlabs, gemini, mimo, minimax,  # noqa: E402
                            openai_compat, volcengine)
@@ -42,6 +46,22 @@ KEYS = {"OPENAI_API_KEY": "sk-openai-test", "INWORLD_API_KEY": "aW53b3JsZDp0ZXN0
         "VOLC_TTS_API_KEY": "volc-test", "MINIMAX_API_KEY": "mm-test"}
 for k, v in KEYS.items():
     credentials.set(k, v)
+
+
+class patch_env:
+    """临时改凭证（None 表示删除），退出时还原。"""
+
+    def __init__(self, **kv):
+        self.kv, self.old = kv, {}
+
+    def __enter__(self):
+        for k, v in self.kv.items():
+            self.old[k] = credentials.get(k)
+            credentials.delete(k) if v is None else credentials.set(k, v)
+
+    def __exit__(self, *a):
+        for k, v in self.old.items():
+            credentials.delete(k) if v is None else credentials.set(k, v)
 
 
 class Fake:
@@ -218,55 +238,164 @@ class DedicatedTest(unittest.TestCase):
 
 
 class ModelListTest(unittest.TestCase):
-    """Provider 与模型解耦：获取模型列表、添加、停用、删除。"""
+    """Provider 与模型解耦：在线发现、我的模型（添加 / 移除）、注册表更新。"""
 
-    def _discover(self, mod, provider, *responses):
+    def _discover(self, provider, *responses):
         fake = Fake(*responses)
-        old, mod.http = mod.http, fake
+        old, discovery.http = discovery.http, fake
         try:
             return hub.discover(provider), fake.calls
         finally:
-            mod.http = old
+            discovery.http = old
 
-    def test_openai_filters_tts_and_marks_added(self):
-        rs, calls = self._discover(openai_compat, "openai", {"data": [{"id": "gpt-4o-mini-tts"}, {"id": "tts-1-hd"}, {"id": "gpt-5"}, {"id": "whisper-1"}]})
+    def tearDown(self):
+        for f in (catalog.PREFS, *catalog.DISCOVERED.glob("*.json")) if catalog.DISCOVERED.exists() else (catalog.PREFS,):
+            f.unlink(missing_ok=True)
+        catalog.rebuild()
+
+    def test_openai_filters_tts(self):
+        r, calls = self._discover("openai", {"data": [{"id": "gpt-4o-mini-tts"}, {"id": "tts-1-hd"}, {"id": "gpt-5"}, {"id": "whisper-1"}]})
         self.assertEqual(calls[0]["url"], "https://api.openai.com/v1/models")
-        self.assertEqual({r["remote"]: r["added"] for r in rs}, {"gpt-4o-mini-tts": True, "tts-1-hd": False})
+        self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer sk-openai-test")
+        ms = {m["remote"]: m for m in r["models"]}
+        self.assertEqual(set(ms), {"gpt-4o-mini-tts", "tts-1-hd"})
+        self.assertEqual(ms["gpt-4o-mini-tts"]["source"], "registry")      # 注册表里有的保留核对过的信息
+        self.assertTrue(ms["tts-1-hd"]["inferred"])                         # 注册表里没有的：能力按同家推断
+        self.assertTrue(ms["gpt-4o-mini-tts"]["mine"])                      # 连接后默认带上推荐模型
+        self.assertFalse(ms["tts-1-hd"]["mine"])                            # 新查到的要用户自己添加
 
     def test_siliconflow_audio_type_excludes_asr(self):
-        rs, calls = self._discover(openai_compat, "siliconflow", {"data": [{"id": "FunAudioLLM/CosyVoice2-0.5B"}, {"id": "FunAudioLLM/SenseVoiceSmall"}, {"id": "fishaudio/fish-speech-1.5"}]})
+        r, calls = self._discover("siliconflow", {"data": [{"id": "FunAudioLLM/CosyVoice2-0.5B"}, {"id": "FunAudioLLM/SenseVoiceSmall"}, {"id": "fishaudio/fish-speech-1.5"}]})
         self.assertTrue(calls[0]["url"].endswith("/models?type=audio"))
-        self.assertEqual([r["remote"] for r in rs], ["FunAudioLLM/CosyVoice2-0.5B", "fishaudio/fish-speech-1.5"])
-        self.assertTrue(rs[0]["added"])
+        self.assertEqual(sorted(m["remote"] for m in r["models"]), ["FunAudioLLM/CosyVoice2-0.5B", "fishaudio/fish-speech-1.5"])
 
     def test_elevenlabs_and_gemini(self):
-        rs, _ = self._discover(elevenlabs, "elevenlabs", [{"model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": True},
-                                                          {"model_id": "scribe_v1", "name": "Scribe", "can_do_text_to_speech": False}])
-        self.assertEqual([r["remote"] for r in rs], ["eleven_v3"])
-        rs, calls = self._discover(gemini, "gemini", {"models": [{"name": "models/gemini-3.8-flash-tts", "displayName": "Gemini 3.8 Flash TTS"}], "nextPageToken": "p2"},
-                                   {"models": [{"name": "models/gemini-3.1-flash-tts-preview"}, {"name": "models/gemini-3.8-pro"}]})
-        self.assertEqual([r["remote"] for r in rs], ["gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"])
+        r, _ = self._discover("elevenlabs", [{"model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": True},
+                                             {"model_id": "eleven_v4", "name": "Eleven v4", "can_do_text_to_speech": True},
+                                             {"model_id": "scribe_v1", "name": "Scribe", "can_do_text_to_speech": False}])
+        self.assertIn("elevenlabs/eleven_v4", [m["id"] for m in r["models"]])
+        self.assertNotIn("elevenlabs/scribe_v1", [m["id"] for m in r["models"]])
+        r, calls = self._discover("gemini", {"models": [{"name": "models/gemini-3.8-flash-tts"}], "nextPageToken": "p2"},
+                                  {"models": [{"name": "models/gemini-3.1-flash-tts-preview"}, {"name": "models/gemini-3.8-pro"}]})
+        self.assertEqual(r["found"], 2)
         self.assertEqual(calls[0]["headers"]["x-goog-api-key"], "gm-test")
         self.assertIn("pageToken=p2", calls[1]["url"])
+
+    def test_openrouter_public_list_voices_price(self):
+        with patch_env(OPENROUTER_API_KEY=None):
+            r, calls = self._discover("openrouter", {"data": [
+                {"id": "fish-audio/s2.1-pro", "name": "Fish Audio: S2.1 Pro", "pricing": {"prompt": "0.000015", "completion": "0"}},
+                {"id": "x-ai/grok-voice-tts-1.0", "name": "Grok Voice", "pricing": {"prompt": "0.000015", "completion": "0"}, "supported_voices": ["eve", "rex"]},
+                {"id": "google/gemini-3.8-flash-tts", "pricing": {"prompt": "0.0000005", "completion": "0.000009"}, "supported_voices": ["Kore"]},
+                {"id": "deepgram/flux-tts:free", "pricing": {"prompt": "0", "completion": "0"}, "supported_voices": ["flux-alexis-en"]}]})
+        self.assertEqual(calls[0]["headers"], {})                           # 公开接口：不用 Key 也能浏览
+        self.assertIn("output_modalities=speech", calls[0]["url"])
+        ms = {m["remote"]: m for m in r["models"]}
+        self.assertEqual(ms["fish-audio/s2.1-pro"]["price"], {"amount": 15.0, "currency": "USD", "per": 1000000, "unit": "char"})
+        self.assertFalse(ms["fish-audio/s2.1-pro"]["caps"]["voices"])
+        self.assertEqual(ms["x-ai/grok-voice-tts-1.0"]["voice_count"], 2)
+        self.assertEqual(ms["deepgram/flux-tts:free"]["price"]["text"], "免费")
+        self.assertIn("token", ms["google/gemini-3.8-flash-tts"]["price"]["text"])
+        self.assertTrue(all(m["status"] == "needs_key" and not m["mine"] for m in ms.values()))
+
+    def test_openrouter_synth(self):
+        with patch_env(OPENROUTER_API_KEY="sk-or-test"):
+            self._discover("openrouter", {"data": [{"id": "x-ai/grok-voice-tts-1.0", "pricing": {"prompt": "0.000015"}, "supported_voices": ["eve", "rex"]},
+                                                   {"id": "fish-audio/s2.1-pro", "pricing": {"prompt": "0.000015"}}]})
+            calls, dur = run(openai_compat, "openrouter/x-ai/grok-voice-tts-1.0", Fake(MP3), input="你好", voice="rex", speed=1.5, instructions="开心")
+            c = calls[0]
+            self.assertEqual(c["url"], "https://openrouter.ai/api/v1/audio/speech")
+            self.assertEqual(c["headers"]["Authorization"], "Bearer sk-or-test")
+            self.assertEqual({k: c["body"][k] for k in ("model", "voice", "input", "response_format")},
+                             {"model": "x-ai/grok-voice-tts-1.0", "voice": "rex", "input": "你好", "response_format": "mp3"})
+            self.assertNotIn("speed", c["body"])            # 各家对 speed 支持不一：交给 ffmpeg
+            self.assertNotIn("instructions", c["body"])     # OpenRouter 的语音接口没有 instructions
+            self.assertAlmostEqual(dur, 0.2, delta=0.05)     # 0.3 秒 × 1/1.5
+            calls, _ = run(openai_compat, "openrouter/fish-audio/s2.1-pro", Fake(MP3), input="你好")
+            self.assertNotIn("voice", calls[0]["body"])     # 没有预置音色的模型不传 voice
+            ref = "openrouter/x-ai/grok-voice-tts-1.0:eve"   # 带斜杠的模型 ID 也能写音色引用
+            self.assertEqual(hub.resolve_voice(ref), {"model": "openrouter/x-ai/grok-voice-tts-1.0", "voice": "eve"})
+
+    def test_huggingface_local_variants(self):
+        search = [{"id": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit", "downloads": 944},
+                  {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", "downloads": 5703},
+                  {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "downloads": 5156},
+                  {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit", "downloads": 2499}]
+        tree = [{"type": "file", "path": "model.safetensors", "size": 1_500_000_000}, {"type": "file", "path": "config.json", "size": 2000}]
+        r, calls = self._discover("local", search, tree, tree, tree)
+        self.assertEqual(calls[0]["headers"], {})
+        ids = [m["id"] for m in r["models"]]
+        self.assertIn("local/qwen3-tts-0.6b-customvoice-4bit", ids)
+        self.assertNotIn("local/qwen3-tts-1.7b-base-8bit", ids)                        # Base（克隆）没有对应引擎，不列
+        self.assertEqual(sum(1 for m in r["models"] if m.get("repo", "").endswith("1.7B-CustomVoice-8bit")), 1)   # 与注册表的 qwen3 去重
+        m = catalog.find_model("local/qwen3-tts-0.6b-customvoice-4bit")
+        self.assertEqual((m["engine"], m["params_b"], m["quant"], m["size_gb"]), ("qwen3", 0.6, "MLX 4bit", 1.5))
+        self.assertFalse(m["inferred"])
+        self.assertEqual(catalog.find_model("local/qwen3-tts-1.7b-voicedesign-4bit")["engine"], "qwen3-design")
 
     def test_no_list_endpoint(self):
         with self.assertRaises(hub.VoxError) as e:
             hub.discover("minimax")
-        self.assertIn("手动添加", str(e.exception))
+        self.assertIn("手动填模型 ID", str(e.exception))
 
-    def test_add_synth_disable_remove(self):
-        r = hub.add_model("gemini", "gemini-3.1-flash-tts-preview")
-        self.assertEqual(r["model"], "gemini/gemini-3.1-flash-tts-preview")
-        calls, _ = run(gemini, "gemini/gemini-3.1-flash-tts-preview", Fake({"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": base64.b64encode(WAV).decode()}}]}}]}),
-                       input="你好", voice="Kore")
-        self.assertIn("gemini-3.1-flash-tts-preview", calls[0]["url"])   # 借用 Gemini 的适配器，只换模型名
-        hub.set_enabled(r["model"], False)
-        self.assertFalse(next(m for m in hub.models("gemini") if m["id"] == r["model"])["enabled"])
-        self.assertFalse(any(v["model"] == r["model"] for v in hub.voices(with_samples=False)))  # 停用后不进音色库
-        hub.remove_model(r["model"])
-        self.assertIsNone(catalog.find_model(r["model"]))
-        with self.assertRaises(hub.VoxError):
-            hub.remove_model("gemini/gemini-3.8-flash-tts")  # 内置模型只能停用
+    def test_mine_add_remove_custom(self):
+        self.assertTrue(next(m for m in hub.models("minimax") if m["id"] == "minimax/speech-2.8-hd")["mine"])
+        hub.remove_model("minimax/speech-2.8-hd")
+        self.assertFalse(next(m for m in hub.models("minimax") if m["id"] == "minimax/speech-2.8-hd")["mine"])
+        self.assertFalse(any(v["model"] == "minimax/speech-2.8-hd" for v in hub.voices(with_samples=False)))   # 不在我的模型，不进音色库
+        hub.add_model("minimax/speech-2.8-hd")
+        r = hub.add_model("minimax/speech-2.9-hd")                           # 列表接口查不到的，手动填模型 ID
+        m = catalog.find_model(r["model"])
+        self.assertEqual((m["source"], m["adapter"], m["remote"]), ("custom", "minimax", "speech-2.9-hd"))
+        calls, _ = run(minimax, "minimax/speech-2.9-hd", Fake({"data": {"audio": MP3.hex()}, "base_resp": {"status_code": 0}}), input="你好")
+        self.assertEqual(calls[0]["body"]["model"], "speech-2.9-hd")      # 借用同家的请求格式，只换模型名
+        hub.remove_model("minimax/speech-2.9-hd")
+        self.assertIsNone(catalog.find_model("minimax/speech-2.9-hd"))      # 手动添加的，移除后从目录消失
+
+    def test_unconnected_provider(self):
+        with patch_env(INWORLD_API_KEY=None):
+            ms = hub.models("inworld")
+            self.assertTrue(all(m["status"] == "needs_key" and not m["mine"] for m in ms))
+            with self.assertRaises(hub.VoxError) as e:
+                hub.add_model("inworld/inworld-tts-2")
+            self.assertIn("先连接", str(e.exception))
+            self.assertEqual(hub.models("inworld", mine=True), [])
+
+    def test_local_remove_requires_confirmation(self):
+        m = catalog.find_model("local/qwen3-design")
+        d = fetch.local_dir(m["repo"])                                       # 测试目录里的假模型，不碰真实文件
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "model.safetensors").write_bytes(b"x")
+        (d / ".vox-complete").write_text("{}")
+        self.assertTrue(next(x for x in hub.models("local") if x["id"] == m["id"])["mine"])
+        with self.assertRaises(hub.VoxError) as e:
+            hub.remove_model(m["id"])
+        self.assertIn("--delete-files", str(e.exception))
+        self.assertTrue(d.exists())
+        hub.remove_model(m["id"], delete_files=True)
+        self.assertFalse(d.exists())
+        self.assertFalse(next(x for x in hub.models("local") if x["id"] == m["id"])["mine"])
+
+    def test_registry_update(self):
+        cur = json.loads(catalog.BUILTIN.read_text())
+        fake = Fake({"schema": 2}, {**cur, "providers": {**cur["providers"], "newco": {"kind": "cloud", "adapter": "newco_adapter"}}}, cur,
+                    {**cur, "updated": "2099-01-01", "models": cur["models"] + [{"provider": "openai", "remote": "gpt-9-tts", "name": "gpt-9-tts", "recommended": True}]})
+        old, base.http = base.http, fake
+        try:
+            with self.assertRaises(hub.VoxError):
+                hub.registry_update("https://example.invalid/r.json")       # 格式不对
+            with self.assertRaises(hub.VoxError) as e:
+                hub.registry_update("https://example.invalid/r.json")       # 需要新适配器 → 提示升级
+            self.assertIn("升级", str(e.exception))
+            self.assertFalse(hub.registry_update("https://example.invalid/r.json")["changed"])   # 同一版本
+            r = hub.registry_update("https://example.invalid/r.json")
+        finally:
+            base.http = old
+        self.assertTrue(r["changed"])
+        self.assertEqual(catalog.find_model("openai/gpt-9-tts")["source"], "registry")
+        catalog.UPDATED.unlink()
+        catalog.rebuild()
+        self.assertIsNone(catalog.find_model("openai/gpt-9-tts"))
 
 
 class GatewayTest(unittest.TestCase):

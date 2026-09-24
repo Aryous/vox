@@ -1,9 +1,10 @@
 """vox：本地 TTS 命令行。与 WebUI / HTTP API 共用同一套模型 ID、音色引用和参数名；所有命令都支持 --json。
 
-  vox models                      模型列表与状态（-p gemini 只看一家）
-  vox models fetch gemini         向 Provider 获取它现在提供的 TTS 模型
-  vox models add gemini/<模型名>   把模型加进清单；off / on / rm 停用、启用、删除
-  vox pull qwen3                  下载模型
+  vox models                      我的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家
+  vox models fetch openrouter     在线查询这家现在提供的模型（local = HuggingFace）
+  vox models add qwen3            加进我的模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
+  vox models rm <模型 ID>          移出我的模型（本地要加 --delete-files，会删除模型文件）
+  vox models update               拉取新版模型注册表（只是数据，不含代码）
   vox voices -m qwen3             音色库
   vox sample qwen3:serena --play  试听音色样本
   vox say "你好" -m qwen3 -v serena -i "轻快友好" -o hi.mp3 --play
@@ -69,46 +70,54 @@ def _fmt_size(n):
     return f"{n / 1e9:.2f} GB" if n >= 1e8 else f"{n / 1e6:.0f} MB"
 
 
-STATUS_LABEL = {"loaded": "已加载", "ready": "已下载", "not_downloaded": "未下载", "downloading": "下载中", "planned": "即将支持", "unavailable": "不可用", "needs_key": "需 Key"}
+STATUS_LABEL = {"loaded": "已加载", "ready": "可用", "not_downloaded": "未下载", "downloading": "下载中", "needs_key": "未连接"}
 
 
 # ---------- 模型 ----------
 def cmd_models(a):
     hub = _hub()
     act, tgt = a.action or "list", a.target
-    if act != "list" and not tgt:
-        raise SystemExit(f"vox models {act} 需要参数，例如 " + {"fetch": "vox models fetch gemini", "add": "vox models add openai/tts-1"}.get(act, f"vox models {act} openai/gpt-4o-mini-tts"))
+    if act in ("fetch", "add", "rm") and not tgt:
+        raise SystemExit(f"vox models {act} 需要参数，例如 " + {"fetch": "vox models fetch openrouter", "add": "vox models add qwen3", "rm": "vox models rm openai/gpt-4o-mini-tts"}[act])
     if act == "fetch":
-        rs = _server("/api/providers/discover", {"provider": tgt}) or hub.discover(tgt)
-        return _out(a, rs, lambda: [print(f"{'✓ 已在清单' if r['added'] else '  可添加  '}  {r['id']:<40} {r.get('name') or ''}") for r in rs] or print("没有找到 TTS 模型"))
+        r = _server("/api/providers/discover", {"provider": tgt}) or _call(hub.discover, tgt)
+        return _out(a, r, lambda: [print(f"✓ 查到 {r['found']} 个模型"), _print_models(r["models"])])
     if act == "add":
-        prov, _, remote = tgt.partition("/")
-        r = _server("/api/models/add", {"provider": prov, "remote": remote, "name": a.name}) or hub.add_model(prov, remote, a.name)
-        return _out(a, r, lambda: print(f"✓ 已添加 {r['model']}"))
-    if act in ("on", "off"):
-        r = _server("/api/models/enable", {"model": tgt, "enabled": act == "on"}) or hub.set_enabled(tgt, act == "on")
-        return _out(a, r, lambda: print(f"✓ {r['model']} 已{'启用' if r['enabled'] else '停用'}"))
+        m = hub.catalog.find_model(tgt)
+        if m and m["provider"] == "local" and _server("/api/status") is None:   # 没有服务在跑：本进程前台下载
+            return _out(a, _call(hub.pull, tgt, False), lambda: None)
+        r = _server("/api/models/add", {"model": tgt, "name": a.name}) or _call(hub.add_model, tgt, name=a.name)
+        if r.get("state"):   # 本地模型：开始下载
+            return _out(a, r, lambda: print(f"↓ 开始下载 {r['model']}；进度：vox status，或在 WebUI 模型页查看"))
+        return _out(a, r, lambda: print(f"✓ 已加进我的模型：{r['model']}"))
     if act == "rm":
-        r = _server("/api/models/remove", {"model": tgt}) or hub.remove_model(tgt)
-        return _out(a, r, lambda: print(f"✓ 已从清单删除 {r['model']}"))
-    ms = _server("/api/models" + (f"?provider={a.provider}" if a.provider else "")) or hub.models(a.provider)
+        r = _server("/api/models/remove", {"model": tgt, "delete_files": a.delete_files}) or _call(hub.remove_model, tgt, a.delete_files)
+        return _out(a, r, lambda: print(f"✓ 已移出我的模型：{r['model']}" + (f"（已删除 {r['deleted']}）" if r.get("deleted") else "")))
+    if act == "update":
+        r = _server("/api/registry/update", {"url": tgt}) or _call(hub.registry_update, tgt)
+        return _out(a, r, lambda: print(f"{'✓ 已更新' if r['changed'] else '已是最新'}：注册表 {r['updated']}（{r['providers']} 家 Provider，{r['models']} 个登记模型）"))
+    qs = "&".join(x for x in (f"provider={a.provider}" if a.provider else "", "" if a.all else "mine=1") if x)
+    ms = _server("/api/models?" + qs) or hub.models(a.provider, None if a.all else True)
+    _out(a, ms, lambda: _print_models(ms) if ms else print("我的模型是空的。vox models --all 查看可以下载 / 添加的模型"))
 
-    def human():
-        for m in ms:
-            caps = "、".join(k for k, v in {"预置音色": m["caps"]["voices"], "情绪指令": m["caps"]["instructions"], "声音设计": m["caps"]["design"], "可复现": m["caps"]["seed"]}.items() if v)
-            print(f"{m['id']:<34} {STATUS_LABEL.get(m['status'], m['status']):<5} {'' if m['enabled'] else '已停用 '}{m['name']}  [{caps}]")
-    _out(a, ms, human)
+
+def _call(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except ValueError as e:
+        raise SystemExit(f"✗ {e}")
+
+
+def _print_models(ms):
+    for m in ms:
+        caps = "、".join(k for k, v in {"音色": m["caps"]["voices"], "指令": m["caps"]["instructions"], "设计": m["caps"]["design"], "种子": m["caps"]["seed"]}.items() if v)
+        mark = "●" if m["mine"] else "○"
+        print(f"{mark} {m['id']:<44} {STATUS_LABEL.get(m['status'], m['status']):<5} {m['name']}  [{caps}]")
 
 
 def cmd_pull(a):
-    hub = _hub()
-    m = hub.model_or_raise(a.model)
-    if m["provider"] != "local" or m["engine"] == "kokoro":
-        raise SystemExit("这个模型不需要手动下载" if m["provider"] == "local" else "云端模型无需下载")
-    from . import fetch
-
-    fetch.fetch(m["repo"], a.source)
-    _out(a, hub.pull_status(m["id"]), lambda: None)
+    r = _call(_hub().pull, a.model, False, a.source)   # 前台下载，进度打到 stderr
+    _out(a, r, lambda: None)
 
 
 def cmd_load(a, unload=False):
@@ -282,11 +291,13 @@ def main(argv=None):
         sp.add_argument("--json", action="store_true", help="输出 JSON（给脚本和 Agent）")
         return sp
 
-    s = J(sub.add_parser("models", aliases=["engines"], help="模型清单：list / fetch <provider> / add <provider>/<模型> / on / off / rm"))
-    s.add_argument("action", nargs="?", choices=["list", "fetch", "add", "on", "off", "rm"])
-    s.add_argument("target", nargs="?", help="Provider（fetch）或模型 ID")
-    s.add_argument("-p", "--provider", help="只列出某一家")
-    s.add_argument("--name", help="add 时的显示名")
+    s = J(sub.add_parser("models", aliases=["engines"], help="我的模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
+    s.add_argument("action", nargs="?", choices=["list", "fetch", "add", "rm", "update"])
+    s.add_argument("target", nargs="?", help="Provider（fetch）、模型 ID（add / rm）或注册表地址（update）")
+    s.add_argument("-p", "--provider", help="只看某一家")
+    s.add_argument("--all", action="store_true", help="也列出还不能用的（未下载、未连接、未添加）")
+    s.add_argument("--name", help="手动添加时的显示名")
+    s.add_argument("--delete-files", action="store_true", help="rm 本地模型时确认删除已下载的文件")
     s.set_defaults(fn=cmd_models)
     s = J(sub.add_parser("pull", aliases=["fetch"], help="下载模型（ModelScope，按 HuggingFace 哈希校验）"))
     s.add_argument("model", help="模型 ID，如 qwen3、qwen3-design")

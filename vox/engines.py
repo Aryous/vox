@@ -1,7 +1,7 @@
 """TTS 引擎。每个引擎实现 synth(text, voice, instruct, speed, lang, seed, **采样参数) -> (float32 音频, 采样率)，
 以及 voices() / languages() / is_ready()。类属性 params 声明它支持哪些可调参数，WebUI 据此显示控件。
 
-新增引擎：写一个类，登记到 ENGINES。
+新增引擎：写一个类，登记到 ENGINES。引擎按模型实例化（get(模型字典)），同一类引擎可以跑不同的仓库（尺寸、量化）。
 """
 from __future__ import annotations
 
@@ -48,19 +48,23 @@ class Engine:
 
 class Kokoro(Engine):
     name = "kokoro"
-    model = os.environ.get("VOX_KOKORO_MODEL", "hexgrad/Kokoro-82M-v1.1-zh")
+    model = "hexgrad/Kokoro-82M-v1.1-zh"
     about = "82M，Apache 2.0，CPU 即可，100 个中文音色（zf_ 女 / zm_ 男）；快但语气平，英文词容易读错"
     native_speed = True
     default_voice = "zf_003"
 
-    def __init__(self):
+    def __init__(self, repo=None):
+        self.model = repo or self.model
         self._zh = None
+
+    def local_path(self):
+        return Path.home() / ".cache" / "huggingface" / "hub" / ("models--" + self.model.replace("/", "--"))
 
     def is_loaded(self):
         return self._zh is not None
 
     def is_ready(self):
-        snap = Path.home() / ".cache" / "huggingface" / "hub" / ("models--" + self.model.replace("/", "--")) / "snapshots"
+        snap = self.local_path() / "snapshots"
         return any(snap.glob("*/*.pth")) if snap.exists() else False
 
     def _load(self):
@@ -98,8 +102,14 @@ class Kokoro(Engine):
 class _Qwen3(Engine):
     native_speed = False
 
-    def __init__(self):
+    def __init__(self, repo=None):
+        self.model = repo or self.model
         self._m = None
+
+    def local_path(self):
+        from . import fetch
+
+        return Path(self.model) if Path(self.model).exists() else fetch.local_dir(self.model)
 
     def _src(self):
         from . import fetch
@@ -149,7 +159,7 @@ QWEN_GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
 
 class Qwen3(_Qwen3):
     name = "qwen3"
-    model = os.environ.get("VOX_QWEN_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit")
+    model = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
     about = "Qwen3-TTS CustomVoice 1.7B（MLX 8bit），Apache 2.0；9 个预置音色 + instruct 控制语气情绪"
     params = ("voice", "instruct", "speed", "lang", "seed") + QWEN_GEN
     default_voice = "vivian"
@@ -168,7 +178,7 @@ class Qwen3(_Qwen3):
 
 class Qwen3Design(_Qwen3):
     name = "qwen3-design"
-    model = os.environ.get("VOX_QWEN_DESIGN_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
+    model = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
     about = "Qwen3-TTS VoiceDesign 1.7B（MLX 8bit）；不用预置音色，用 instruct 一句话描述想要的声音"
     params = ("instruct", "speed", "lang", "seed") + QWEN_GEN
 
@@ -185,16 +195,17 @@ class Qwen3Design(_Qwen3):
 
 
 ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro)}
-_live: dict[str, Engine] = {}
+_live: dict[str, Engine] = {}   # 模型 ID → 引擎实例
 
 
 def loaded() -> list[str]:
-    return [n for n, e in _live.items() if e.is_loaded()]
+    """已加载进内存的模型 ID。"""
+    return [mid for mid, e in _live.items() if e.is_loaded()]
 
 
-def unload(name: str) -> bool:
+def unload(mid: str) -> bool:
     """释放模型占用的内存。"""
-    e = _live.pop(name, None)
+    e = _live.pop(mid, None)
     if not e:
         return False
     del e
@@ -210,9 +221,12 @@ def unload(name: str) -> bool:
     return True
 
 
-def get(name: str) -> Engine:
+def get(m: dict) -> Engine:
+    """按模型字典取引擎实例（engine 字段选类，repo 字段选仓库）。"""
+    name = m["engine"]
     if name not in ENGINES:
         raise SystemExit(f"未知引擎 {name}，可选：{', '.join(ENGINES)}")
-    if name not in _live:
-        _live[name] = ENGINES[name]()
-    return _live[name]
+    e = _live.get(m["id"])
+    if e is None or e.model != (m.get("repo") or ENGINES[name].model):
+        e = _live[m["id"]] = ENGINES[name](m.get("repo"))
+    return e

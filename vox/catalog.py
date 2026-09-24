@@ -1,97 +1,194 @@
-"""模型与音色目录：提供方（本地 / 云端）、模型规格、音色元数据。
+"""模型目录：从注册表数据、在线列表和用户添加的条目，组装出 vox 认识的全部模型。
 
 统一命名（CLI、HTTP、WebUI 共用）：
   模型 ID    提供方/模型，如 local/qwen3、openai/gpt-4o-mini-tts；本地模型也接受短名 qwen3
   音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；自定义音色为 my:<id>
   请求参数   model / input / voice / instructions / speed / seed / lang / temperature / top_p / top_k / repetition_penalty
+
+数据与代码分开：
+  代码（vox/providers/*.py、vox/engines.py）只负责「怎么调用」：每家的请求怎么拼、响应怎么解析。
+  数据（vox/registry.json）负责「有什么」：Provider 的连接方式、适配器配置、已核对的模型元数据（能力、价格、音色）。
+  注册表随包发布，也可以用 vox models update 拉新版（存到 $VOX_HOME/registry.json，日期更新时优先生效）。
+
+模型条目的三种来源（source 字段）：
+  registry     注册表里核对过的模型
+  discovered   各 Provider 在线列表查到的模型（缓存在 $VOX_HOME/discovered/<provider>.json）
+  custom       用户手动添加的模型 ID（记在 $VOX_HOME/models.json）
+在线查到、但注册表里没有的模型，借用 template 指向的同家模型的配置（请求格式相同），能力标记为 inferred（推断）。
+
+注册表字段：
+  providers.<id>   name / kind（local|cloud）/ icon / region / credentials / optional / console / docs
+                   adapter / key_env / compat（适配器配置）/ model_defaults（该家模型的公共字段）/ discover（在线列表怎么查）
+  models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
+                   recommended（连接后默认加进「我的模型」）/ about / languages …
+  voice_sets       可复用的静态音色表
+  price            {"amount", "currency", "per", "unit"}；unit 为 char / byte（UTF-8 字节）/ cjk2（汉字按 2 字符）/ token（只展示）
 """
 from __future__ import annotations
 
+import copy
+import json
 import os
+from pathlib import Path
 
-from .cloud_catalog import CLOUD_MODELS
-
-# ---------- 提供方 ----------
-# credentials：需要的环境变量（也可存进 ~/.config/vox/credentials.json）；icon 来自 LobeHub Icons（MIT），mono 表示单色图标
-PROVIDERS = {
-    "local": {"name": "本地", "kind": "local", "icon": "huggingface", "about": "在本机运行，模型下载后完全离线"},
-    "openai": {"name": "OpenAI", "kind": "cloud", "icon": "openai", "mono": True, "region": "海外",
-               "credentials": [{"env": "OPENAI_API_KEY", "label": "API Key"}], "optional": [{"env": "OPENAI_BASE_URL", "label": "Base URL（可选，接代理时填）"}],
-               "console": "https://platform.openai.com/settings/organization/api-keys", "docs": "https://developers.openai.com/api/docs/guides/text-to-speech"},
-    "inworld": {"name": "Inworld", "kind": "cloud", "icon": None, "letter": "In", "region": "海外",
-                "credentials": [{"env": "INWORLD_API_KEY", "label": "API Key（控制台复制的完整 Base64 串）"}],
-                "console": "https://platform.inworld.ai/api-keys", "docs": "https://docs.inworld.ai/tts/openai-compatibility"},
-    "elevenlabs": {"name": "ElevenLabs", "kind": "cloud", "icon": "elevenlabs", "mono": True, "region": "海外",
-                   "credentials": [{"env": "ELEVENLABS_API_KEY", "label": "API Key"}],
-                   "console": "https://elevenlabs.io/app/settings/api-keys", "docs": "https://elevenlabs.io/docs/api-reference/text-to-speech/convert"},
-    "gemini": {"name": "Google Gemini", "kind": "cloud", "icon": "gemini", "region": "海外",
-               "credentials": [{"env": "GEMINI_API_KEY", "label": "API Key"}],
-               "console": "https://aistudio.google.com/apikey", "docs": "https://ai.google.dev/gemini-api/docs/speech-generation"},
-    "aliyun": {"name": "阿里云百炼", "kind": "cloud", "icon": "bailian", "region": "国内",
-               "credentials": [{"env": "DASHSCOPE_API_KEY", "label": "API Key（北京地域）"}], "optional": [{"env": "DASHSCOPE_WORKSPACE_ID", "label": "WorkspaceId（可选，llm- 开头；填了走官方推荐的专属域名）"}],
-               "console": "https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key", "docs": "https://help.aliyun.com/zh/model-studio/tts-model"},
-    "volcengine": {"name": "火山引擎 豆包", "kind": "cloud", "icon": "doubao", "region": "国内",
-                   "credentials": [{"env": "VOLC_TTS_API_KEY", "label": "API Key（新版控制台）"}],
-                   "console": "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default", "docs": "https://docs.volcengine.com/docs/6561/1598757"},
-    "minimax": {"name": "MiniMax", "kind": "cloud", "icon": "minimax", "region": "国内",
-                "credentials": [{"env": "MINIMAX_API_KEY", "label": "API Key"}], "optional": [{"env": "MINIMAX_BASE_URL", "label": "Base URL（国际站填 https://api.minimax.io）"}],
-                "console": "https://platform.minimax.cn/user-center/basic-information/interface-key", "docs": "https://platform.minimaxi.com/docs/api-reference/speech-t2a-http"},
-    "stepfun": {"name": "阶跃星辰", "kind": "cloud", "icon": "stepfun", "region": "国内",
-                "credentials": [{"env": "STEPFUN_API_KEY", "label": "API Key"}], "optional": [{"env": "STEPFUN_BASE_URL", "label": "Base URL（国际站填 https://api.stepfun.ai/v1）"}],
-                "console": "https://platform.stepfun.com/interface-key", "docs": "https://platform.stepfun.com/docs/zh/api-reference/audio/create-audio"},
-    "siliconflow": {"name": "硅基流动", "kind": "cloud", "icon": "siliconcloud", "region": "国内",
-                    "credentials": [{"env": "SILICONFLOW_API_KEY", "label": "API Key"}], "optional": [{"env": "SILICONFLOW_BASE_URL", "label": "Base URL（国际站填 https://api.siliconflow.com/v1）"}],
-                    "console": "https://cloud.siliconflow.cn/account/ak", "docs": "https://docs.siliconflow.cn/cn/userguide/capabilities/text-to-speech"},
-    "mimo": {"name": "小米 MiMo", "kind": "cloud", "icon": "xiaomimimo", "mono": True, "region": "国内",
-             "credentials": [{"env": "MIMO_API_KEY", "label": "API Key（sk- 开头）"}],
-             "console": "https://platform.xiaomimimo.com", "docs": "https://mimo.mi.com/docs/en-US/api/audio/tts"},
-}
+BUILTIN = Path(__file__).with_name("registry.json")
+HOME = Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox"))
+UPDATED = HOME / "registry.json"        # vox models update 拉到的新版注册表
+DISCOVERED = HOME / "discovered"        # 在线列表缓存
+PREFS = HOME / "models.json"            # 用户的模型清单：我的模型、手动添加
 
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
+BASE_CAPS = {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True}
+TEMPLATE_DROP = ("id", "alias", "recommended", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
 
-# ---------- 模型 ----------
-# caps：voices 预置音色 / instructions 情绪指令 / design 用描述设计声音 / seed 可复现 / native_speed 原生语速
-MODELS = [
-    {"id": "local/qwen3", "alias": "qwen3", "provider": "local", "engine": "qwen3",
-     "name": "Qwen3-TTS CustomVoice", "family": "Qwen3-TTS", "params_b": 1.7, "quant": "MLX 8bit", "size_gb": 3.08,
-     "license": "Apache-2.0", "repo": os.environ.get("VOX_QWEN_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
-     "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-     "languages": ["中文", "英语", "日语", "韩语", "德语", "法语", "俄语", "葡萄牙语", "西班牙语", "意大利语"],
-     "caps": {"voices": True, "instructions": True, "design": False, "seed": True, "native_speed": False},
-     "params": ["voice", "instructions", "speed", "lang", "seed", *GEN], "default_voice": "serena",
-     "about": "9 个官方预置音色（含北京话、四川话），可用一句话控制语气和情绪。中文最自然。"},
-    {"id": "local/qwen3-design", "alias": "qwen3-design", "provider": "local", "engine": "qwen3-design",
-     "name": "Qwen3-TTS VoiceDesign", "family": "Qwen3-TTS", "params_b": 1.7, "quant": "MLX 8bit", "size_gb": 3.1,
-     "license": "Apache-2.0", "repo": os.environ.get("VOX_QWEN_DESIGN_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"),
-     "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-     "languages": ["中文", "英语", "日语", "韩语", "德语", "法语", "俄语", "葡萄牙语", "西班牙语", "意大利语"],
-     "caps": {"voices": False, "instructions": True, "design": True, "seed": True, "native_speed": False},
-     "params": ["instructions", "speed", "lang", "seed", *GEN], "default_voice": None,
-     "about": "没有预置音色：用一句话描述想要的声音（年龄、性别、音色、语气），模型现场设计。"},
-    {"id": "local/kokoro", "alias": "kokoro", "provider": "local", "engine": "kokoro",
-     "name": "Kokoro 82M 中文", "family": "Kokoro", "params_b": 0.082, "quant": "PyTorch", "size_gb": 0.33,
-     "license": "Apache-2.0", "repo": os.environ.get("VOX_KOKORO_MODEL", "hexgrad/Kokoro-82M-v1.1-zh"),
-     "homepage": "https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh",
-     "languages": ["中文"],
-     "caps": {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True},
-     "params": ["voice", "speed"], "default_voice": "zf_003",
-     "about": "82M 小模型，CPU 就能跑，速度快；100 个中文音色，但语气偏平，英文单词容易读错。"},
-] + CLOUD_MODELS  # 云端模型见 cloud_catalog.py
+REG: dict = {}
+PROVIDERS: dict = {}
+VOICE_SETS: dict = {}
+MODELS: list[dict] = []   # 原地重建，其他模块持有的引用始终有效
+_BY_ID: dict = {}
 
-# ---------- 音色元数据 ----------
-# Qwen3 预置音色：性别、母语、描述译自官方模型卡 https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
-QWEN3_VOICES = [
-    ("vivian", "Vivian", "女", "中文", "明亮、略带锋芒的年轻女声"),
-    ("serena", "Serena", "女", "中文", "温暖柔和的年轻女声"),
-    ("uncle_fu", "Uncle Fu", "男", "中文", "阅历感男声，音色低沉醇厚"),
-    ("dylan", "Dylan", "男", "北京话", "清亮自然的北京青年男声"),
-    ("eric", "Eric", "男", "四川话", "活泼的成都男声，明亮里带点沙哑"),
-    ("ryan", "Ryan", "男", "英语", "节奏感强、有冲劲的男声"),
-    ("aiden", "Aiden", "男", "英语", "阳光的美式男声，中频清晰"),
-    ("ono_anna", "Ono Anna", "女", "日语", "俏皮轻盈的日语女声"),
-    ("sohee", "Sohee", "女", "韩语", "温暖、情感丰富的韩语女声"),
-]
 
+def _read(p: Path, default):
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return default
+
+
+def valid(reg) -> bool:
+    return isinstance(reg, dict) and reg.get("schema") == 1 and isinstance(reg.get("providers"), dict) and isinstance(reg.get("models"), list)
+
+
+def load_registry() -> dict:
+    """内置注册表与 vox models update 拉到的版本，取日期较新的一个。"""
+    reg = json.loads(BUILTIN.read_text())
+    reg["_from"] = "builtin"
+    up = _read(UPDATED, None)
+    if valid(up) and str(up.get("updated", "")) > str(reg.get("updated", "")):
+        up["_from"] = "updated"
+        return up
+    return reg
+
+
+def voice_list(ref) -> list[dict] | str:
+    """解析音色字段："@集合名"、集合与字典混排的列表、字符串列表（在线列表常见），或 "engine"（由本地引擎提供）。"""
+    if ref in (None, "engine"):
+        return ref or []
+    if isinstance(ref, str):
+        return copy.deepcopy(VOICE_SETS.get(ref[1:], [])) if ref.startswith("@") else []
+    out = []
+    for x in ref:
+        if isinstance(x, str) and x.startswith("@"):
+            out += copy.deepcopy(VOICE_SETS.get(x[1:], []))
+        elif isinstance(x, str):
+            out.append({"voice": x, "name": x, "gender": "", "lang": "", "description": ""})
+        elif isinstance(x, dict) and x.get("voice"):
+            out.append({"name": x["voice"], "gender": "", "lang": "", "description": "", **x})
+    return out
+
+
+def materialize(entry: dict, source: str, templates: dict | None = None) -> dict | None:
+    """把注册表 / 在线列表 / 用户添加的条目补全成完整的模型字典。Provider 未知或没有可用的适配器时返回 None。"""
+    pid = entry.get("provider")
+    p = PROVIDERS.get(pid)
+    if not p:
+        return None
+    tpl = (templates or {}).get(entry.get("template")) if entry.get("template") else None
+    if tpl:
+        base = {k: v for k, v in copy.deepcopy(tpl).items() if k not in TEMPLATE_DROP}
+        caps = dict(tpl["caps"])
+    else:
+        base = copy.deepcopy(p.get("model_defaults", {}))
+        caps = {**BASE_CAPS, **base.pop("caps", {})}
+    m = {**base, **{k: v for k, v in copy.deepcopy(entry).items() if k != "template"}}
+    m["caps"] = {**caps, **entry.get("caps", {})}
+    m.setdefault("languages", ["多语言"])
+    if p["kind"] == "cloud":
+        m.setdefault("adapter", p.get("adapter"))
+        m.setdefault("key_env", p.get("key_env"))
+        m["compat"] = {**p.get("compat", {}), **(tpl or {}).get("compat", {}), **entry.get("compat", {})}
+        m.setdefault("license", "商用 API")
+        if not m.get("remote"):
+            return None
+        m.setdefault("id", f"{pid}/{m['remote']}")
+    else:
+        if m.get("repo_env") and os.environ.get(m["repo_env"]):
+            m["repo"] = os.environ[m["repo_env"]]
+        if not m.get("id"):
+            return None
+    m["voices"] = voice_list(m.get("voices"))
+    if m["voices"] != "engine":
+        m.setdefault("default_voice", (m["voices"][0]["voice"] if m["voices"] else None))
+    m["source"] = source
+    m["inferred"] = entry.get("inferred", bool(entry.get("template")) and not entry.get("caps"))
+    return m
+
+
+def rebuild():
+    """重新组装 MODELS：注册表 → 在线列表缓存 → 用户手动添加；同一个模型只保留最先出现的（注册表优先）。"""
+    global REG
+    REG = load_registry()
+    PROVIDERS.clear()
+    PROVIDERS.update(REG["providers"])
+    VOICE_SETS.clear()
+    VOICE_SETS.update(REG.get("voice_sets", {}))
+    out, seen = [], set()
+
+    def key(m):
+        return (m["provider"], m.get("repo") or m.get("remote") or m["id"]) if m["provider"] == "local" else (m["provider"], m["remote"])
+
+    def add(m):
+        if m and m["id"] not in seen and key(m) not in seen:
+            seen.update((m["id"], key(m)))
+            out.append(m)
+
+    for e in REG["models"]:
+        add(materialize(e, "registry"))
+    templates = {m["id"]: m for m in out}
+    for pid in PROVIDERS:   # 模板默认用同家第一个注册表模型
+        first = next((m for m in out if m["provider"] == pid), None)
+        if first:
+            templates.setdefault(f"{pid}:*", first)
+    for f in sorted(DISCOVERED.glob("*.json")) if DISCOVERED.exists() else []:
+        for e in _read(f, {}).get("items", []):
+            e = {**e, "template": e.get("template") or (f"{e.get('provider')}:*" if not e.get("caps") else None)}
+            add(materialize(e, "discovered", templates))
+    for e in _read(PREFS, {}).get("custom", []):
+        e = {**e, "template": e.get("template") or f"{e.get('provider')}:*"}
+        add(materialize(e, "custom", templates))
+    MODELS[:] = out
+    _BY_ID.clear()
+    for m in out:
+        _BY_ID.setdefault(m["id"], m)
+    for m in out:
+        if m.get("alias"):
+            _BY_ID.setdefault(m["alias"], m)
+
+
+def find_model(mid: str) -> dict | None:
+    """接受完整 ID（local/qwen3）、短名（qwen3）或 OpenAI 风格的裸名（gpt-4o-mini-tts）。"""
+    if not mid:
+        return None
+    if mid in _BY_ID:
+        return _BY_ID[mid]
+    for m in MODELS:
+        if mid == m["id"].split("/", 1)[-1]:
+            return m
+    return None
+
+
+def short(m: dict) -> str:
+    return m.get("alias") or m["id"]
+
+
+def provider_template(pid: str, template: str | None = None) -> dict | None:
+    """在线查到的新模型借用哪个已登记模型的配置。"""
+    if template:
+        return find_model(template)
+    return next((m for m in MODELS if m["provider"] == pid and m["source"] == "registry"), None)
+
+
+# ---------- WebUI / CLI 用的文案 ----------
 # 声音设计的示例描述（WebUI 情绪 / 描述快捷项也用这里）
 DESIGN_EXAMPLES = [
     "二十多岁的年轻女声，清亮活泼，普通话标准",
@@ -107,16 +204,4 @@ INSTRUCTION_EXAMPLES = ["平静自然地叙述", "沉稳温和的纪录片旁白
 DEFAULT_SAMPLE_TEXT = "你好，我是{name}。今天是 9 月 23 日，顺便读个英文词：GitHub。你觉得这个声音怎么样？"
 SAMPLE_SEED = 20260923
 
-
-def find_model(mid: str) -> dict | None:
-    """接受完整 ID（local/qwen3）、短名（qwen3）或 OpenAI 风格的裸名。"""
-    if not mid:
-        return None
-    for m in MODELS:
-        if mid in (m["id"], m.get("alias")) or mid == m["id"].split("/", 1)[-1]:
-            return m
-    return None
-
-
-def short(m: dict) -> str:
-    return m.get("alias") or m["id"]
+rebuild()

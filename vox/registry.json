@@ -1,0 +1,2801 @@
+{
+ "schema": 1,
+ "updated": "2026-09-24",
+ "about": "vox 模型注册表：Provider 的连接与适配器配置、已核对的模型元数据（能力、价格、音色）。这是数据，不是代码；新模型优先来自各家的在线列表，注册表只补接口给不了的信息，并作为离线兜底。字段说明见 vox/catalog.py。",
+ "providers": {
+  "local": {
+   "name": "本地",
+   "kind": "local",
+   "icon": "huggingface",
+   "about": "在本机运行，模型下载后完全离线",
+   "discover": {
+    "kind": "huggingface",
+    "public": true,
+    "author": "mlx-community",
+    "search": "Qwen3-TTS",
+    "rules": [
+     {
+      "match": "CustomVoice",
+      "template": "local/qwen3"
+     },
+     {
+      "match": "VoiceDesign",
+      "template": "local/qwen3-design"
+     }
+    ],
+    "note": "只列出 vox 引擎能直接运行的模型；Base（声音克隆）等暂不支持。"
+   }
+  },
+  "openrouter": {
+   "name": "OpenRouter",
+   "kind": "cloud",
+   "icon": "openrouter",
+   "mono": true,
+   "region": "聚合",
+   "about": "一个 Key 调用多家 TTS；模型列表公开，不用 Key 也能浏览。",
+   "credentials": [
+    {
+     "env": "OPENROUTER_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "console": "https://openrouter.ai/settings/keys",
+   "docs": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+   "adapter": "openai_compat",
+   "key_env": "OPENROUTER_API_KEY",
+   "compat": {
+    "base": "https://openrouter.ai/api/v1",
+    "speed": null
+   },
+   "discover": {
+    "kind": "openrouter",
+    "public": true
+   },
+   "model_defaults": {
+    "languages": [
+     "多语言"
+    ],
+    "license": "商用 API（经 OpenRouter）",
+    "family": "OpenRouter",
+    "caps": {
+     "voices": true,
+     "instructions": false,
+     "design": false,
+     "seed": false,
+     "native_speed": false
+    },
+    "params": [
+     "voice",
+     "speed"
+    ]
+   }
+  },
+  "openai": {
+   "name": "OpenAI",
+   "kind": "cloud",
+   "icon": "openai",
+   "mono": true,
+   "region": "海外",
+   "credentials": [
+    {
+     "env": "OPENAI_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "optional": [
+    {
+     "env": "OPENAI_BASE_URL",
+     "label": "Base URL（可选，接代理时填）"
+    }
+   ],
+   "console": "https://platform.openai.com/settings/organization/api-keys",
+   "docs": "https://developers.openai.com/api/docs/guides/text-to-speech",
+   "adapter": "openai_compat",
+   "key_env": "OPENAI_API_KEY",
+   "compat": {
+    "base": "https://api.openai.com/v1",
+    "base_env": "OPENAI_BASE_URL",
+    "instructions": "instructions",
+    "speed": [
+     0.25,
+     4
+    ]
+   },
+   "model_defaults": {
+    "languages": [
+     "多语言"
+    ],
+    "license": "商用 API",
+    "default_voice": "marin",
+    "family": "OpenAI TTS"
+   },
+   "discover": {
+    "kind": "openai_models",
+    "match": "tts"
+   }
+  },
+  "inworld": {
+   "name": "Inworld",
+   "kind": "cloud",
+   "icon": null,
+   "letter": "In",
+   "region": "海外",
+   "credentials": [
+    {
+     "env": "INWORLD_API_KEY",
+     "label": "API Key（控制台复制的完整 Base64 串）"
+    }
+   ],
+   "console": "https://platform.inworld.ai/api-keys",
+   "docs": "https://docs.inworld.ai/tts/openai-compatibility",
+   "adapter": "openai_compat",
+   "key_env": "INWORLD_API_KEY",
+   "compat": {
+    "base": "https://api.inworld.ai/v1",
+    "speed": [
+     0.5,
+     1.5
+    ],
+    "list_voices": {
+     "url": "https://api.inworld.ai/voices/v1/voices?pageSize=200&filter=source=\"SYSTEM\"",
+     "kind": "inworld"
+    }
+   },
+   "model_defaults": {
+    "languages": [
+     "多语言"
+    ],
+    "license": "商用 API",
+    "default_voice": "Ashley",
+    "family": "Inworld"
+   }
+  },
+  "elevenlabs": {
+   "name": "ElevenLabs",
+   "kind": "cloud",
+   "icon": "elevenlabs",
+   "mono": true,
+   "region": "海外",
+   "credentials": [
+    {
+     "env": "ELEVENLABS_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "console": "https://elevenlabs.io/app/settings/api-keys",
+   "docs": "https://elevenlabs.io/docs/api-reference/text-to-speech/convert",
+   "adapter": "elevenlabs",
+   "key_env": "ELEVENLABS_API_KEY",
+   "model_defaults": {
+    "license": "商用 API",
+    "family": "ElevenLabs"
+   },
+   "discover": {
+    "kind": "elevenlabs"
+   }
+  },
+  "gemini": {
+   "name": "Google Gemini",
+   "kind": "cloud",
+   "icon": "gemini",
+   "region": "海外",
+   "credentials": [
+    {
+     "env": "GEMINI_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "console": "https://aistudio.google.com/apikey",
+   "docs": "https://ai.google.dev/gemini-api/docs/speech-generation",
+   "adapter": "gemini",
+   "key_env": "GEMINI_API_KEY",
+   "model_defaults": {
+    "license": "商用 API",
+    "default_voice": "Kore",
+    "family": "Gemini"
+   },
+   "discover": {
+    "kind": "gemini"
+   }
+  },
+  "aliyun": {
+   "name": "阿里云百炼",
+   "kind": "cloud",
+   "icon": "bailian",
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "DASHSCOPE_API_KEY",
+     "label": "API Key（北京地域）"
+    }
+   ],
+   "optional": [
+    {
+     "env": "DASHSCOPE_WORKSPACE_ID",
+     "label": "WorkspaceId（可选，llm- 开头；填了走官方推荐的专属域名）"
+    }
+   ],
+   "console": "https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key",
+   "docs": "https://help.aliyun.com/zh/model-studio/tts-model",
+   "adapter": "dashscope",
+   "key_env": "DASHSCOPE_API_KEY",
+   "model_defaults": {
+    "license": "商用 API",
+    "family": "阿里云百炼"
+   }
+  },
+  "volcengine": {
+   "name": "火山引擎 豆包",
+   "kind": "cloud",
+   "icon": "doubao",
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "VOLC_TTS_API_KEY",
+     "label": "API Key（新版控制台）"
+    }
+   ],
+   "console": "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default",
+   "docs": "https://docs.volcengine.com/docs/6561/1598757",
+   "adapter": "volcengine",
+   "key_env": "VOLC_TTS_API_KEY",
+   "model_defaults": {
+    "languages": [
+     "中文",
+     "方言",
+     "英语"
+    ],
+    "license": "商用 API",
+    "default_voice": "zh_female_vv_uranus_bigtts",
+    "family": "火山引擎 豆包"
+   }
+  },
+  "minimax": {
+   "name": "MiniMax",
+   "kind": "cloud",
+   "icon": "minimax",
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "MINIMAX_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "optional": [
+    {
+     "env": "MINIMAX_BASE_URL",
+     "label": "Base URL（国际站填 https://api.minimax.io）"
+    }
+   ],
+   "console": "https://platform.minimax.cn/user-center/basic-information/interface-key",
+   "docs": "https://platform.minimaxi.com/docs/api-reference/speech-t2a-http",
+   "adapter": "minimax",
+   "key_env": "MINIMAX_API_KEY",
+   "model_defaults": {
+    "languages": [
+     "中文",
+     "粤语",
+     "40 种语言"
+    ],
+    "license": "商用 API",
+    "default_voice": "female-shaonv",
+    "family": "MiniMax"
+   }
+  },
+  "stepfun": {
+   "name": "阶跃星辰",
+   "kind": "cloud",
+   "icon": "stepfun",
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "STEPFUN_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "optional": [
+    {
+     "env": "STEPFUN_BASE_URL",
+     "label": "Base URL（国际站填 https://api.stepfun.ai/v1）"
+    }
+   ],
+   "console": "https://platform.stepfun.com/interface-key",
+   "docs": "https://platform.stepfun.com/docs/zh/api-reference/audio/create-audio",
+   "adapter": "openai_compat",
+   "key_env": "STEPFUN_API_KEY",
+   "compat": {
+    "base": "https://api.stepfun.com/v1",
+    "base_env": "STEPFUN_BASE_URL",
+    "instructions": "instruction",
+    "speed": [
+     0.5,
+     2
+    ],
+    "list_voices": {
+     "url": "https://api.stepfun.com/v1/audio/system_voices?model=step-tts-2",
+     "kind": "stepfun"
+    }
+   },
+   "model_defaults": {
+    "languages": [
+     "中文",
+     "英语"
+    ],
+    "license": "商用 API",
+    "default_voice": "wenrounvsheng",
+    "family": "阶跃星辰"
+   },
+   "discover": {
+    "kind": "openai_models",
+    "match": "tts"
+   }
+  },
+  "siliconflow": {
+   "name": "硅基流动",
+   "kind": "cloud",
+   "icon": "siliconcloud",
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "SILICONFLOW_API_KEY",
+     "label": "API Key"
+    }
+   ],
+   "optional": [
+    {
+     "env": "SILICONFLOW_BASE_URL",
+     "label": "Base URL（国际站填 https://api.siliconflow.com/v1）"
+    }
+   ],
+   "console": "https://cloud.siliconflow.cn/account/ak",
+   "docs": "https://docs.siliconflow.cn/cn/userguide/capabilities/text-to-speech",
+   "adapter": "openai_compat",
+   "key_env": "SILICONFLOW_API_KEY",
+   "compat": {
+    "base": "https://api.siliconflow.cn/v1",
+    "base_env": "SILICONFLOW_BASE_URL",
+    "instructions": "prefix",
+    "voice_prefix": true,
+    "speed": [
+     0.25,
+     4
+    ],
+    "extra": {
+     "sample_rate": 44100
+    }
+   },
+   "model_defaults": {
+    "languages": [
+     "中文",
+     "英语"
+    ],
+    "license": "商用 API",
+    "default_voice": "claire",
+    "family": "硅基流动"
+   },
+   "discover": {
+    "kind": "openai_models",
+    "query": "?type=audio",
+    "exclude": [
+     "sensevoice",
+     "whisper",
+     "asr",
+     "telespeech"
+    ]
+   }
+  },
+  "mimo": {
+   "name": "小米 MiMo",
+   "kind": "cloud",
+   "icon": "xiaomimimo",
+   "mono": true,
+   "region": "国内",
+   "credentials": [
+    {
+     "env": "MIMO_API_KEY",
+     "label": "API Key（sk- 开头）"
+    }
+   ],
+   "console": "https://platform.xiaomimimo.com",
+   "docs": "https://mimo.mi.com/docs/en-US/api/audio/tts",
+   "adapter": "mimo",
+   "key_env": "MIMO_API_KEY",
+   "model_defaults": {
+    "license": "商用 API",
+    "family": "小米 MiMo"
+   }
+  }
+ },
+ "models": [
+  {
+   "id": "local/qwen3",
+   "alias": "qwen3",
+   "provider": "local",
+   "engine": "qwen3",
+   "name": "Qwen3-TTS CustomVoice 1.7B · 8bit",
+   "family": "Qwen3-TTS",
+   "params_b": 1.7,
+   "quant": "MLX 8bit",
+   "size_gb": 3.08,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "韩语",
+    "德语",
+    "法语",
+    "俄语",
+    "葡萄牙语",
+    "西班牙语",
+    "意大利语"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed",
+    "lang",
+    "seed",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty"
+   ],
+   "default_voice": "serena",
+   "about": "9 个官方预置音色（含北京话、四川话），可用一句话控制语气和情绪。中文最自然。",
+   "recommended": true,
+   "repo_env": "VOX_QWEN_MODEL",
+   "voices": "@qwen3-local"
+  },
+  {
+   "id": "local/qwen3-design",
+   "alias": "qwen3-design",
+   "provider": "local",
+   "engine": "qwen3-design",
+   "name": "Qwen3-TTS VoiceDesign 1.7B · 8bit",
+   "family": "Qwen3-TTS",
+   "params_b": 1.7,
+   "quant": "MLX 8bit",
+   "size_gb": 3.1,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "韩语",
+    "德语",
+    "法语",
+    "俄语",
+    "葡萄牙语",
+    "西班牙语",
+    "意大利语"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": true,
+    "design": true,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "instructions",
+    "speed",
+    "lang",
+    "seed",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty"
+   ],
+   "default_voice": null,
+   "about": "没有预置音色：用一句话描述想要的声音（年龄、性别、音色、语气），模型现场设计。",
+   "recommended": true,
+   "repo_env": "VOX_QWEN_DESIGN_MODEL"
+  },
+  {
+   "id": "local/kokoro",
+   "alias": "kokoro",
+   "provider": "local",
+   "engine": "kokoro",
+   "name": "Kokoro 82M 中文",
+   "family": "Kokoro",
+   "params_b": 0.082,
+   "quant": "PyTorch",
+   "size_gb": 0.33,
+   "license": "Apache-2.0",
+   "repo": "hexgrad/Kokoro-82M-v1.1-zh",
+   "homepage": "https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh",
+   "languages": [
+    "中文"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": false,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "speed"
+   ],
+   "default_voice": "zf_003",
+   "about": "82M 小模型，CPU 就能跑，速度快；100 个中文音色，但语气偏平，英文单词容易读错。",
+   "recommended": true,
+   "repo_env": "VOX_KOKORO_MODEL",
+   "voices": "engine"
+  },
+  {
+   "provider": "openai",
+   "remote": "gpt-4o-mini-tts",
+   "name": "gpt-4o-mini-tts",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@openai",
+   "price": {
+    "text": "文本 $0.60 + 音频 $12 / 百万 token",
+    "unit": "token"
+   },
+   "about": "OpenAI 的指令式 TTS：instructions 用自然语言控制语气。13 个内置音色，针对英语优化。",
+   "recommended": true
+  },
+  {
+   "provider": "inworld",
+   "remote": "inworld-tts-2",
+   "name": "Inworld TTS-2",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "compat": {
+    "instructions": "instructions",
+    "english_only": true
+   },
+   "voices": "@inworld",
+   "price": {
+    "amount": 25,
+    "currency": "USD",
+    "per": 1000000,
+    "unit": "char"
+   },
+   "about": "OpenAI 兼容；instructions 控制语气（必须英文），支持 200+ 语言，普通话在最高档。配好 Key 后自动拉取完整音色库。",
+   "recommended": true
+  },
+  {
+   "provider": "inworld",
+   "remote": "inworld-tts-2-flash",
+   "name": "Inworld TTS-2 Flash",
+   "params": [
+    "voice",
+    "speed"
+   ],
+   "voices": "@inworld",
+   "price": {
+    "amount": 15,
+    "currency": "USD",
+    "per": 1000000,
+    "unit": "char"
+   },
+   "about": "低延迟版本（首字约 20ms），不支持语气指令，但文本里的 [laugh] 等非语言标签可用。",
+   "caps": {
+    "voices": true,
+    "instructions": false,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "recommended": true
+  },
+  {
+   "provider": "elevenlabs",
+   "remote": "eleven_v3",
+   "name": "Eleven v3",
+   "languages": [
+    "70+ 语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed",
+    "seed",
+    "lang"
+   ],
+   "default_voice": null,
+   "price": {
+    "amount": 0.1,
+    "currency": "USD",
+    "per": 1000,
+    "unit": "char"
+   },
+   "about": "表现力最强的一档。instructions 会变成音频标签（如 [whispers]），支持 seed。配好 Key 后自动拉取官方音色。",
+   "recommended": true
+  },
+  {
+   "provider": "elevenlabs",
+   "remote": "eleven_flash_v2_5",
+   "name": "Eleven Flash v2.5",
+   "languages": [
+    "32 种语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": false,
+    "design": false,
+    "seed": true,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed",
+    "lang"
+   ],
+   "default_voice": null,
+   "price": {
+    "amount": 0.05,
+    "currency": "USD",
+    "per": 1000,
+    "unit": "char"
+   },
+   "about": "低延迟（约 75ms），原生语速 0.7–1.2。",
+   "recommended": true
+  },
+  {
+   "provider": "elevenlabs",
+   "remote": "eleven_multilingual_v2",
+   "name": "Eleven Multilingual v2",
+   "languages": [
+    "29 种语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": false,
+    "design": false,
+    "seed": true,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed",
+    "lang"
+   ],
+   "default_voice": null,
+   "price": {
+    "amount": 0.1,
+    "currency": "USD",
+    "per": 1000,
+    "unit": "char"
+   },
+   "about": "稳定的多语种模型，单次最长 1 万字符。",
+   "recommended": true
+  },
+  {
+   "provider": "gemini",
+   "remote": "gemini-3.8-flash-tts",
+   "name": "Gemini 3.8 Flash TTS",
+   "languages": [
+    "130 种语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@gemini",
+   "price": {
+    "text": "音频 $9 / 百万 token（有免费层）",
+    "unit": "token"
+   },
+   "about": "2026-09-22 发布。instructions 作为风格描述（speech_metadata.style），文本里可用 <laugh> 等标签。",
+   "recommended": true
+  },
+  {
+   "provider": "gemini",
+   "remote": "gemini-3.8-flash-lite-tts",
+   "name": "Gemini 3.8 Flash Lite TTS",
+   "languages": [
+    "101 种语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@gemini",
+   "price": {
+    "text": "音频 $6 / 百万 token（有免费层）",
+    "unit": "token"
+   },
+   "about": "更便宜的一档，官方明确支持普通话和粤语。",
+   "recommended": true
+  },
+  {
+   "provider": "aliyun",
+   "dashscope_group": "A",
+   "remote": "qwen-audio-3.0-tts-plus",
+   "name": "Qwen-Audio 3.0 TTS Plus",
+   "languages": [
+    "中文",
+    "多语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": true,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed",
+    "seed"
+   ],
+   "default_voice": "longanlingxin",
+   "voices": "@qwen-audio-3",
+   "price": {
+    "amount": 1.4,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "instr_examples": [
+    "温柔地安慰对方",
+    "用播音腔字正腔圆地读",
+    "带着笑意，语气轻快"
+   ],
+   "about": "2026-07 发布。instruction 自然语言控制，文本里还能用 [whispers] [laughing] 等标签；支持 seed。另有 500+ 基础音色（ID 形如 qwen-audio-3.0-tts-plus-xxx）。",
+   "recommended": true
+  },
+  {
+   "provider": "aliyun",
+   "dashscope_group": "A",
+   "remote": "cosyvoice-v3-flash",
+   "name": "CosyVoice v3 Flash",
+   "languages": [
+    "中文",
+    "方言",
+    "多语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": true,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed",
+    "seed"
+   ],
+   "default_voice": "longanhuan_v3",
+   "voices": "@cosyvoice-v3",
+   "price": {
+    "amount": 0.8,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "instr_examples": [
+    "你说话的情感是happy。",
+    "你说话的情感是sad。",
+    "请用四川话表达。",
+    "请用粤语表达。"
+   ],
+   "about": "系统音色的指令只接受固定格式：「你说话的情感是<情感>。」或「请用<方言>表达。」（带句号）。",
+   "recommended": true
+  },
+  {
+   "provider": "aliyun",
+   "dashscope_group": "B",
+   "remote": "qwen3-tts-instruct-flash",
+   "name": "Qwen3-TTS Instruct Flash（云端）",
+   "languages": [
+    "中文",
+    "英语",
+    "多语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed",
+    "lang"
+   ],
+   "default_voice": "Cherry",
+   "voices": "@qwen3-tts-cloud",
+   "price": {
+    "amount": 0.8,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "instr_examples": [
+    "语速较快，语调上扬，适合介绍产品",
+    "低沉缓慢，像深夜电台"
+   ],
+   "about": "Qwen3-TTS 的云端指令版：instructions 自然语言控制语速和情绪（只对这 24 个音色有效），单次 ≤600 字。",
+   "recommended": true
+  },
+  {
+   "provider": "aliyun",
+   "dashscope_group": "B",
+   "remote": "qwen3-tts-flash",
+   "name": "Qwen3-TTS Flash（云端）",
+   "languages": [
+    "中文",
+    "方言",
+    "多语言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": false,
+    "design": false,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "lang"
+   ],
+   "default_voice": "Cherry",
+   "voices": [
+    "@qwen3-tts-cloud",
+    "@qwen3-tts-dialect"
+   ],
+   "price": {
+    "amount": 0.8,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "about": "49 个音色，含上海话、北京话、四川话、粤语等方言；不支持指令。",
+   "recommended": true
+  },
+  {
+   "provider": "volcengine",
+   "remote": "seed-tts-2.0",
+   "name": "豆包语音合成 2.0",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@volcengine",
+   "price": {
+    "amount": 3,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "instr_examples": [
+    "你可以用特别开心的语气说话吗？",
+    "用很痛心的语气说",
+    "像在哄小孩睡觉一样轻声说"
+   ],
+   "about": "中文自然度第一梯队。instructions 作为「上文」（context_texts）引导语气，写成一句请求效果最好。",
+   "recommended": true
+  },
+  {
+   "provider": "minimax",
+   "remote": "speech-2.8-hd",
+   "name": "Speech 2.8 HD",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@minimax",
+   "price": {
+    "amount": 3.5,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "cjk2"
+   },
+   "instr_examples": [
+    "开心",
+    "伤心",
+    "生气",
+    "害怕",
+    "厌恶",
+    "惊讶",
+    "平静"
+   ],
+   "instr_enum": true,
+   "about": "情绪只能选枚举（开心 / 伤心 / 生气 / 害怕 / 厌恶 / 惊讶 / 平静）；文本里可写 (laughs)(sighs) 等语气词、<#0.5#> 停顿。配好 Key 后拉取 300+ 系统音色。",
+   "recommended": true
+  },
+  {
+   "provider": "minimax",
+   "remote": "speech-2.8-turbo",
+   "name": "Speech 2.8 Turbo",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@minimax",
+   "price": {
+    "amount": 2.0,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "cjk2"
+   },
+   "instr_examples": [
+    "开心",
+    "伤心",
+    "生气",
+    "害怕",
+    "厌恶",
+    "惊讶",
+    "平静"
+   ],
+   "instr_enum": true,
+   "about": "更快更便宜的一档，能力同 HD。",
+   "recommended": true
+  },
+  {
+   "provider": "stepfun",
+   "remote": "stepaudio-3-tts",
+   "name": "StepAudio 3 TTS",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@stepfun",
+   "price": {
+    "amount": 2.5,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "about": "2026-09-15 发布。instruction 用自然语言控制语气（≤500 字），文本里的（括号）会被当作指令而不朗读。",
+   "recommended": true
+  },
+  {
+   "provider": "stepfun",
+   "remote": "stepaudio-2.5-tts",
+   "name": "StepAudio 2.5 TTS",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@stepfun",
+   "price": {
+    "amount": 5.8,
+    "currency": "CNY",
+    "per": 10000,
+    "unit": "char"
+   },
+   "about": "上一代表现力模型，instruction ≤200 字。",
+   "recommended": true
+  },
+  {
+   "provider": "siliconflow",
+   "id": "siliconflow/cosyvoice2",
+   "alias": "sf-cosyvoice2",
+   "remote": "FunAudioLLM/CosyVoice2-0.5B",
+   "name": "CosyVoice2（硅基流动）",
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": true
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "voices": "@siliconflow",
+   "price": {
+    "amount": 50,
+    "currency": "CNY",
+    "per": 1000000,
+    "unit": "byte"
+   },
+   "about": "托管开源 CosyVoice2。指令写进正文（vox 自动拼成「指令<|endofprompt|>正文」），支持 [laughter] 等标签。",
+   "recommended": true
+  },
+  {
+   "provider": "mimo",
+   "remote": "mimo-v2.5-tts",
+   "name": "MiMo V2.5 TTS",
+   "languages": [
+    "中文",
+    "英语",
+    "方言"
+   ],
+   "caps": {
+    "voices": true,
+    "instructions": true,
+    "design": false,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "default_voice": "mimo_default",
+   "voices": "@mimo",
+   "price": {
+    "text": "限时免费",
+    "unit": "token"
+   },
+   "about": "风格指令用自然语言写；文本里可用（开心）[叹气] 等标签，句首加（唱歌）还能唱。",
+   "recommended": true
+  },
+  {
+   "provider": "mimo",
+   "remote": "mimo-v2.5-tts-voicedesign",
+   "name": "MiMo V2.5 声音设计",
+   "languages": [
+    "中文",
+    "英语"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": true,
+    "design": true,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "instructions",
+    "speed"
+   ],
+   "default_voice": null,
+   "price": {
+    "text": "限时免费",
+    "unit": "token"
+   },
+   "about": "没有预置音色：用一句话描述声音，模型现场设计。",
+   "recommended": true
+  }
+ ],
+ "voice_sets": {
+  "openai": [
+   {
+    "voice": "marin",
+    "name": "marin",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方推荐"
+   },
+   {
+    "voice": "cedar",
+    "name": "cedar",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方推荐"
+   },
+   {
+    "voice": "alloy",
+    "name": "alloy",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "ash",
+    "name": "ash",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "ballad",
+    "name": "ballad",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "coral",
+    "name": "coral",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "echo",
+    "name": "echo",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "fable",
+    "name": "fable",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "nova",
+    "name": "nova",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "onyx",
+    "name": "onyx",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "sage",
+    "name": "sage",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "shimmer",
+    "name": "shimmer",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   },
+   {
+    "voice": "verse",
+    "name": "verse",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方内置音色（针对英语优化）"
+   }
+  ],
+  "inworld": [
+   {
+    "voice": "Ashley",
+    "name": "Ashley",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方示例音色"
+   },
+   {
+    "voice": "Dennis",
+    "name": "Dennis",
+    "gender": "",
+    "lang": "多语言",
+    "description": "官方示例音色"
+   }
+  ],
+  "gemini": [
+   {
+    "voice": "Zephyr",
+    "name": "Zephyr",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Bright 明亮"
+   },
+   {
+    "voice": "Puck",
+    "name": "Puck",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Upbeat 轻快"
+   },
+   {
+    "voice": "Charon",
+    "name": "Charon",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Informative 信息感"
+   },
+   {
+    "voice": "Kore",
+    "name": "Kore",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Firm 坚定"
+   },
+   {
+    "voice": "Fenrir",
+    "name": "Fenrir",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Excitable 兴奋"
+   },
+   {
+    "voice": "Leda",
+    "name": "Leda",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Youthful 年轻"
+   },
+   {
+    "voice": "Orus",
+    "name": "Orus",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Firm 坚定"
+   },
+   {
+    "voice": "Aoede",
+    "name": "Aoede",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Breezy 轻松"
+   },
+   {
+    "voice": "Callirrhoe",
+    "name": "Callirrhoe",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Easy-going 随和"
+   },
+   {
+    "voice": "Autonoe",
+    "name": "Autonoe",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Bright 明亮"
+   },
+   {
+    "voice": "Enceladus",
+    "name": "Enceladus",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Breathy 气声"
+   },
+   {
+    "voice": "Iapetus",
+    "name": "Iapetus",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Clear 清晰"
+   },
+   {
+    "voice": "Umbriel",
+    "name": "Umbriel",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Easy-going 随和"
+   },
+   {
+    "voice": "Algieba",
+    "name": "Algieba",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Smooth 顺滑"
+   },
+   {
+    "voice": "Despina",
+    "name": "Despina",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Smooth 顺滑"
+   },
+   {
+    "voice": "Erinome",
+    "name": "Erinome",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Clear 清晰"
+   },
+   {
+    "voice": "Algenib",
+    "name": "Algenib",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Gravelly 沙哑"
+   },
+   {
+    "voice": "Rasalgethi",
+    "name": "Rasalgethi",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Informative 信息感"
+   },
+   {
+    "voice": "Laomedeia",
+    "name": "Laomedeia",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Upbeat 轻快"
+   },
+   {
+    "voice": "Achernar",
+    "name": "Achernar",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Soft 柔和"
+   },
+   {
+    "voice": "Alnilam",
+    "name": "Alnilam",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Firm 坚定"
+   },
+   {
+    "voice": "Schedar",
+    "name": "Schedar",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Even 平稳"
+   },
+   {
+    "voice": "Gacrux",
+    "name": "Gacrux",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Mature 成熟"
+   },
+   {
+    "voice": "Pulcherrima",
+    "name": "Pulcherrima",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Forward 外放"
+   },
+   {
+    "voice": "Achird",
+    "name": "Achird",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Friendly 友好"
+   },
+   {
+    "voice": "Zubenelgenubi",
+    "name": "Zubenelgenubi",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Casual 随意"
+   },
+   {
+    "voice": "Vindemiatrix",
+    "name": "Vindemiatrix",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Gentle 温和"
+   },
+   {
+    "voice": "Sadachbia",
+    "name": "Sadachbia",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Lively 活泼"
+   },
+   {
+    "voice": "Sadaltager",
+    "name": "Sadaltager",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Knowledgeable 博学"
+   },
+   {
+    "voice": "Sulafat",
+    "name": "Sulafat",
+    "gender": "",
+    "lang": "多语言",
+    "description": "Warm 温暖"
+   }
+  ],
+  "qwen-audio-3": [
+   {
+    "voice": "longanlingxin",
+    "name": "龙安灵心",
+    "gender": "女",
+    "lang": "中文",
+    "description": "知心"
+   },
+   {
+    "voice": "longanlufeng",
+    "name": "龙安路风",
+    "gender": "男",
+    "lang": "中文",
+    "description": "开朗"
+   }
+  ],
+  "cosyvoice-v3": [
+   {
+    "voice": "longanhuan_v3",
+    "name": "龙安欢",
+    "gender": "女",
+    "lang": "中文",
+    "description": "欢脱元气，支持多方言与指令"
+   },
+   {
+    "voice": "longhuhu_v3",
+    "name": "龙呼呼",
+    "gender": "女",
+    "lang": "中文",
+    "description": "女童，支持指令"
+   },
+   {
+    "voice": "longanyang",
+    "name": "龙安洋",
+    "gender": "男",
+    "lang": "中文",
+    "description": "阳光大男孩，支持指令"
+   },
+   {
+    "voice": "longanhuan",
+    "name": "龙安欢",
+    "gender": "女",
+    "lang": "中文",
+    "description": "欢脱元气，支持指令"
+   }
+  ],
+  "qwen3-tts-cloud": [
+   {
+    "voice": "Cherry",
+    "name": "芊悦",
+    "gender": "女",
+    "lang": "中文",
+    "description": "阳光"
+   },
+   {
+    "voice": "Serena",
+    "name": "苏瑶",
+    "gender": "女",
+    "lang": "中文",
+    "description": "温柔"
+   },
+   {
+    "voice": "Ethan",
+    "name": "晨煦",
+    "gender": "男",
+    "lang": "中文",
+    "description": "阳光"
+   },
+   {
+    "voice": "Chelsie",
+    "name": "千雪",
+    "gender": "女",
+    "lang": "中文",
+    "description": "二次元"
+   },
+   {
+    "voice": "Momo",
+    "name": "茉兔",
+    "gender": "女",
+    "lang": "中文",
+    "description": "撒娇"
+   },
+   {
+    "voice": "Vivian",
+    "name": "十三",
+    "gender": "女",
+    "lang": "中文",
+    "description": "小暴躁"
+   },
+   {
+    "voice": "Moon",
+    "name": "月白",
+    "gender": "男",
+    "lang": "中文",
+    "description": "率性"
+   },
+   {
+    "voice": "Maia",
+    "name": "四月",
+    "gender": "女",
+    "lang": "中文",
+    "description": "知性"
+   },
+   {
+    "voice": "Kai",
+    "name": "凯",
+    "gender": "男",
+    "lang": "中文",
+    "description": "舒缓"
+   },
+   {
+    "voice": "Nofish",
+    "name": "不吃鱼",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Bella",
+    "name": "萌宝",
+    "gender": "女",
+    "lang": "中文",
+    "description": "萝莉"
+   },
+   {
+    "voice": "Eldric Sage",
+    "name": "沧明子",
+    "gender": "男",
+    "lang": "中文",
+    "description": "老者"
+   },
+   {
+    "voice": "Mia",
+    "name": "乖小妹",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Mochi",
+    "name": "沙小弥",
+    "gender": "男",
+    "lang": "中文",
+    "description": "童声"
+   },
+   {
+    "voice": "Bellona",
+    "name": "燕铮莺",
+    "gender": "女",
+    "lang": "中文",
+    "description": "说书"
+   },
+   {
+    "voice": "Vincent",
+    "name": "田叔",
+    "gender": "男",
+    "lang": "中文",
+    "description": "烟嗓"
+   },
+   {
+    "voice": "Bunny",
+    "name": "萌小姬",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Neil",
+    "name": "阿闻",
+    "gender": "男",
+    "lang": "中文",
+    "description": "新闻"
+   },
+   {
+    "voice": "Elias",
+    "name": "墨讲师",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Arthur",
+    "name": "徐大爷",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Nini",
+    "name": "邻家妹妹",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Seren",
+    "name": "小婉",
+    "gender": "女",
+    "lang": "中文",
+    "description": "助眠"
+   },
+   {
+    "voice": "Pip",
+    "name": "顽屁小孩",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Stella",
+    "name": "少女阿月",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   }
+  ],
+  "volcengine": [
+   {
+    "voice": "zh_female_vv_uranus_bigtts",
+    "name": "Vivi 2.0",
+    "gender": "女",
+    "lang": "中文",
+    "description": "支持 8 种方言"
+   },
+   {
+    "voice": "zh_female_xiaohe_uranus_bigtts",
+    "name": "小何",
+    "gender": "女",
+    "lang": "中文",
+    "description": "支持 8 种方言"
+   },
+   {
+    "voice": "zh_male_m191_uranus_bigtts",
+    "name": "云舟",
+    "gender": "男",
+    "lang": "中文",
+    "description": "支持 8 种方言"
+   },
+   {
+    "voice": "zh_male_taocheng_uranus_bigtts",
+    "name": "小天",
+    "gender": "男",
+    "lang": "中文",
+    "description": "支持 8 种方言"
+   },
+   {
+    "voice": "zh_female_sophie_uranus_bigtts",
+    "name": "魅力苏菲",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_qingxinnvsheng_uranus_bigtts",
+    "name": "清新女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_cancan_uranus_bigtts",
+    "name": "知性灿灿",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_sajiaoxuemei_uranus_bigtts",
+    "name": "撒娇学妹",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_tianmeixiaoyuan_uranus_bigtts",
+    "name": "甜美小源",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_tianmeitaozi_uranus_bigtts",
+    "name": "甜美桃子",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_shuangkuaisisi_uranus_bigtts",
+    "name": "爽快思思",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_linjianvhai_uranus_bigtts",
+    "name": "邻家女孩",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_kefunvsheng_uranus_bigtts",
+    "name": "暖阳女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_xiaoxue_uranus_bigtts",
+    "name": "儿童绘本",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_jitangnv_uranus_bigtts",
+    "name": "鸡汤女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_meilinvyou_uranus_bigtts",
+    "name": "魅力女友",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_liuchangnv_uranus_bigtts",
+    "name": "流畅女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_wenroumama_uranus_bigtts",
+    "name": "温柔妈妈",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_tvbnv_uranus_bigtts",
+    "name": "TVB女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_qiaopinv_uranus_bigtts",
+    "name": "俏皮女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_zhishuaiyingzi_uranus_bigtts",
+    "name": "直率英子",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_gaolengyujie_uranus_bigtts",
+    "name": "高冷御姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_wenroushunv_uranus_bigtts",
+    "name": "温柔淑女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_gufengshaoyu_uranus_bigtts",
+    "name": "古风少御",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_mengyatou_uranus_bigtts",
+    "name": "萌丫头",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_tiexinnvsheng_uranus_bigtts",
+    "name": "贴心女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_kailangjiejie_uranus_bigtts",
+    "name": "开朗姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_linxiao_uranus_bigtts",
+    "name": "林潇",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_lingling_uranus_bigtts",
+    "name": "玲玲姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_qinqienv_uranus_bigtts",
+    "name": "亲切女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_wenjingmaomao_uranus_bigtts",
+    "name": "文静毛毛",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_zhixingnv_uranus_bigtts",
+    "name": "知性女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_qingchezizi_uranus_bigtts",
+    "name": "清澈梓梓",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_tianmeiyueyue_uranus_bigtts",
+    "name": "甜美悦悦",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_roumeinvyou_uranus_bigtts",
+    "name": "柔美女友",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_wenrouxiaoya_uranus_bigtts",
+    "name": "温柔小雅",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_female_shaoergushi_uranus_bigtts",
+    "name": "少儿故事",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_liufei_uranus_bigtts",
+    "name": "刘飞",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_shaonianzixin_uranus_bigtts",
+    "name": "少年梓辛",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_dayi_uranus_bigtts",
+    "name": "大壹",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_ruyayichen_uranus_bigtts",
+    "name": "儒雅逸辰",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_jieshuoxiaoming_uranus_bigtts",
+    "name": "解说小明",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_yizhipiannan_uranus_bigtts",
+    "name": "译制片男",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_linjiananhai_uranus_bigtts",
+    "name": "邻家男孩",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_ruyaqingnian_uranus_bigtts",
+    "name": "儒雅青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_qingcang_uranus_bigtts",
+    "name": "擎苍",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_wennuanahu_uranus_bigtts",
+    "name": "温暖阿虎",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_aojiaobazong_uranus_bigtts",
+    "name": "傲娇霸总",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_lanyinmianbao_uranus_bigtts",
+    "name": "懒音绵宝",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_fanjuanqingnian_uranus_bigtts",
+    "name": "反卷青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_huolixiaoge_uranus_bigtts",
+    "name": "活力小哥",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_baqiqingshu_uranus_bigtts",
+    "name": "霸气青叔",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_xuanyijieshuo_uranus_bigtts",
+    "name": "悬疑解说",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_cixingjieshuonan_uranus_bigtts",
+    "name": "磁性解说男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_gaolengchenwen_uranus_bigtts",
+    "name": "高冷沉稳",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_shenyeboke_uranus_bigtts",
+    "name": "深夜播客",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_kailangdidi_uranus_bigtts",
+    "name": "开朗弟弟",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_kailangxuezhang_uranus_bigtts",
+    "name": "开朗学长",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_youyoujunzi_uranus_bigtts",
+    "name": "悠悠君子",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_qingshuangnanda_uranus_bigtts",
+    "name": "清爽男大",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_yuanboxiaoshu_uranus_bigtts",
+    "name": "渊博小叔",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_yangguangqingnian_uranus_bigtts",
+    "name": "阳光青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_wenrouxiaoge_uranus_bigtts",
+    "name": "温柔小哥",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zh_male_guanggaojieshuo_uranus_bigtts",
+    "name": "广告解说",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   }
+  ],
+  "minimax": [
+   {
+    "voice": "male-qn-qingse",
+    "name": "青涩青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "male-qn-jingying",
+    "name": "精英青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "male-qn-badao",
+    "name": "霸道青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "male-qn-daxuesheng",
+    "name": "青年大学生",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "female-shaonv",
+    "name": "少女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "female-yujie",
+    "name": "御姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "female-chengshu",
+    "name": "成熟女性",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "female-tianmei",
+    "name": "甜美女性",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Reliable_Executive",
+    "name": "沉稳高管",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_News_Anchor",
+    "name": "新闻女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Gentleman",
+    "name": "温润男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Warm_Bestie",
+    "name": "温暖闺蜜",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Male_Announcer",
+    "name": "播报男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Sweet_Lady",
+    "name": "甜美女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Radio_Host",
+    "name": "电台男主播",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Lyrical_Voice",
+    "name": "抒情男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Gentle_Senior",
+    "name": "温柔学姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Crisp_Girl",
+    "name": "清脆少女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Humorous_Elder",
+    "name": "搞笑大爷",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "Chinese (Mandarin)_Wise_Women",
+    "name": "阅历姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   }
+  ],
+  "stepfun": [
+   {
+    "voice": "zixinnansheng",
+    "name": "自信男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "wenrounansheng",
+    "name": "温柔男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "wenrougongzi",
+    "name": "温柔公子",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "yuanqinansheng",
+    "name": "元气男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "cixingnansheng",
+    "name": "磁性男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zhengpaiqingnian",
+    "name": "正派青年",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "qingniandaxuesheng",
+    "name": "青年大学生",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "boyinnansheng",
+    "name": "播音男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "ruyananshi",
+    "name": "儒雅男士",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "shenchennanyin",
+    "name": "深沉男音",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "shuangkuainansheng",
+    "name": "爽快男声",
+    "gender": "男",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "elegantgentle-female",
+    "name": "气质温婉",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "livelybreezy-female",
+    "name": "活力轻快",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "jingdiannvsheng",
+    "name": "经典女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "wenroushunv",
+    "name": "温柔熟女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "tianmeinvsheng",
+    "name": "甜美女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "qingchunshaonv",
+    "name": "清纯少女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "yuanqishaonv",
+    "name": "元气少女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "linjiajiejie",
+    "name": "邻家姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "qinqienvsheng",
+    "name": "亲切女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "wenrounvsheng",
+    "name": "温柔女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "jilingshaonv",
+    "name": "机灵少女",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "ruanmengnvsheng",
+    "name": "软萌女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "youyanvsheng",
+    "name": "优雅女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "lengyanyujie",
+    "name": "冷艳御姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "shuangkuaijiejie",
+    "name": "爽快姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "wenjingxuejie",
+    "name": "文静学姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "linjiameimei",
+    "name": "邻家妹妹",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "zhixingjiejie",
+    "name": "知性姐姐",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "ganliannvsheng",
+    "name": "干练女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "qinhenvsheng",
+    "name": "亲和女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "huolinvsheng",
+    "name": "活力女声",
+    "gender": "女",
+    "lang": "中文",
+    "description": ""
+   },
+   {
+    "voice": "vibrant-youth",
+    "name": "Vibrant Youth",
+    "gender": "男",
+    "lang": "中文",
+    "description": "英文音色"
+   },
+   {
+    "voice": "lively-girl",
+    "name": "Lively Girl",
+    "gender": "女",
+    "lang": "中文",
+    "description": "英文音色"
+   },
+   {
+    "voice": "soft-spoken-gentleman",
+    "name": "Soft-spoken Gentleman",
+    "gender": "男",
+    "lang": "中文",
+    "description": "英文音色"
+   },
+   {
+    "voice": "magnetic-voiced-male",
+    "name": "Magnetic-voiced Male",
+    "gender": "男",
+    "lang": "中文",
+    "description": "英文音色"
+   }
+  ],
+  "siliconflow": [
+   {
+    "voice": "alex",
+    "name": "Alex",
+    "gender": "男",
+    "lang": "中文",
+    "description": "沉稳男声"
+   },
+   {
+    "voice": "benjamin",
+    "name": "Benjamin",
+    "gender": "男",
+    "lang": "中文",
+    "description": "低沉男声"
+   },
+   {
+    "voice": "charles",
+    "name": "Charles",
+    "gender": "男",
+    "lang": "中文",
+    "description": "磁性男声"
+   },
+   {
+    "voice": "david",
+    "name": "David",
+    "gender": "男",
+    "lang": "中文",
+    "description": "欢快男声"
+   },
+   {
+    "voice": "anna",
+    "name": "Anna",
+    "gender": "女",
+    "lang": "中文",
+    "description": "沉稳女声"
+   },
+   {
+    "voice": "bella",
+    "name": "Bella",
+    "gender": "女",
+    "lang": "中文",
+    "description": "激情女声"
+   },
+   {
+    "voice": "claire",
+    "name": "Claire",
+    "gender": "女",
+    "lang": "中文",
+    "description": "温柔女声"
+   },
+   {
+    "voice": "diana",
+    "name": "Diana",
+    "gender": "女",
+    "lang": "中文",
+    "description": "欢快女声"
+   }
+  ],
+  "mimo": [
+   {
+    "voice": "mimo_default",
+    "name": "默认",
+    "gender": "",
+    "lang": "",
+    "description": "国内集群为冰糖，其他集群为 Mia"
+   },
+   {
+    "voice": "冰糖",
+    "name": "冰糖",
+    "gender": "女",
+    "lang": "",
+    "description": "中文女声"
+   },
+   {
+    "voice": "茉莉",
+    "name": "茉莉",
+    "gender": "女",
+    "lang": "",
+    "description": "中文女声"
+   },
+   {
+    "voice": "苏打",
+    "name": "苏打",
+    "gender": "男",
+    "lang": "",
+    "description": "中文男声"
+   },
+   {
+    "voice": "白桦",
+    "name": "白桦",
+    "gender": "男",
+    "lang": "",
+    "description": "中文男声"
+   },
+   {
+    "voice": "Mia",
+    "name": "Mia",
+    "gender": "女",
+    "lang": "",
+    "description": "英文女声"
+   },
+   {
+    "voice": "Chloe",
+    "name": "Chloe",
+    "gender": "女",
+    "lang": "",
+    "description": "英文女声"
+   },
+   {
+    "voice": "Milo",
+    "name": "Milo",
+    "gender": "男",
+    "lang": "",
+    "description": "英文男声"
+   },
+   {
+    "voice": "Dean",
+    "name": "Dean",
+    "gender": "男",
+    "lang": "",
+    "description": "英文男声"
+   }
+  ],
+  "qwen3-local": [
+   {
+    "voice": "vivian",
+    "name": "Vivian",
+    "gender": "女",
+    "lang": "中文",
+    "description": "明亮、略带锋芒的年轻女声"
+   },
+   {
+    "voice": "serena",
+    "name": "Serena",
+    "gender": "女",
+    "lang": "中文",
+    "description": "温暖柔和的年轻女声"
+   },
+   {
+    "voice": "uncle_fu",
+    "name": "Uncle Fu",
+    "gender": "男",
+    "lang": "中文",
+    "description": "阅历感男声，音色低沉醇厚"
+   },
+   {
+    "voice": "dylan",
+    "name": "Dylan",
+    "gender": "男",
+    "lang": "北京话",
+    "description": "清亮自然的北京青年男声"
+   },
+   {
+    "voice": "eric",
+    "name": "Eric",
+    "gender": "男",
+    "lang": "四川话",
+    "description": "活泼的成都男声，明亮里带点沙哑"
+   },
+   {
+    "voice": "ryan",
+    "name": "Ryan",
+    "gender": "男",
+    "lang": "英语",
+    "description": "节奏感强、有冲劲的男声"
+   },
+   {
+    "voice": "aiden",
+    "name": "Aiden",
+    "gender": "男",
+    "lang": "英语",
+    "description": "阳光的美式男声，中频清晰"
+   },
+   {
+    "voice": "ono_anna",
+    "name": "Ono Anna",
+    "gender": "女",
+    "lang": "日语",
+    "description": "俏皮轻盈的日语女声"
+   },
+   {
+    "voice": "sohee",
+    "name": "Sohee",
+    "gender": "女",
+    "lang": "韩语",
+    "description": "温暖、情感丰富的韩语女声"
+   }
+  ],
+  "qwen3-tts-dialect": [
+   {
+    "voice": "Jada",
+    "name": "Jada",
+    "gender": "女",
+    "lang": "上海话",
+    "description": "上海话"
+   },
+   {
+    "voice": "Dylan",
+    "name": "Dylan",
+    "gender": "男",
+    "lang": "北京话",
+    "description": "北京话"
+   },
+   {
+    "voice": "Li",
+    "name": "Li",
+    "gender": "男",
+    "lang": "南京话",
+    "description": "南京话"
+   },
+   {
+    "voice": "Marcus",
+    "name": "Marcus",
+    "gender": "男",
+    "lang": "陕西话",
+    "description": "陕西话"
+   },
+   {
+    "voice": "Roy",
+    "name": "Roy",
+    "gender": "男",
+    "lang": "闽南语",
+    "description": "闽南语"
+   },
+   {
+    "voice": "Peter",
+    "name": "Peter",
+    "gender": "男",
+    "lang": "天津话",
+    "description": "天津话"
+   },
+   {
+    "voice": "Sunny",
+    "name": "Sunny",
+    "gender": "女",
+    "lang": "四川话",
+    "description": "四川话"
+   },
+   {
+    "voice": "Eric",
+    "name": "Eric",
+    "gender": "男",
+    "lang": "四川话",
+    "description": "四川话"
+   },
+   {
+    "voice": "Rocky",
+    "name": "Rocky",
+    "gender": "男",
+    "lang": "粤语",
+    "description": "粤语"
+   },
+   {
+    "voice": "Kiki",
+    "name": "Kiki",
+    "gender": "女",
+    "lang": "粤语",
+    "description": "粤语"
+   }
+  ]
+ }
+}

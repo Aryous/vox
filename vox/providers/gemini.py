@@ -34,23 +34,6 @@ class Gemini(CloudEngine):
             out.append({"voice": vid.split("/")[-1], "name": v.get("display_name") or vid, "gender": g, "lang": v.get("language_code", ""), "description": v.get("description", "")})
         return out or None
 
-    can_list_models = True
-
-    def list_models(self):
-        # https://ai.google.dev/api/models：分页；列表没有 TTS 能力字段，按名字里的 tts 识别
-        out, token = [], ""
-        for _ in range(5):
-            _, _, body = http("GET", f"{BASE}/models?pageSize=1000" + (f"&pageToken={token}" if token else ""), self._h(), timeout=30)
-            j = json.loads(body)
-            for m in j.get("models", []):
-                mid = m.get("name", "").removeprefix("models/")
-                if "tts" in mid.lower():
-                    out.append({"remote": mid, "name": m.get("displayName") or mid, "description": (m.get("description") or "")[:120]})
-            token = j.get("nextPageToken")
-            if not token:
-                break
-        return out
-
     def synth(self, req):
         part = {"text": req["input"]}
         if req.get("instructions"):

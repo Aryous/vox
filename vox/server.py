@@ -21,13 +21,14 @@ WEB = Path(__file__).parent / "web"
 
 
 def llms_txt(base: str) -> str:
-    ms = "\n".join(f"- {m['id']}{'（短名 ' + m['alias'] + '）' if m.get('alias') else ''}：{m['name']}，参数 {', '.join(m['params'])}，状态 {hub.model_status(m)}" for m in catalog.MODELS)
+    ms = "\n".join(f"- {m['id']}{'（短名 ' + m['alias'] + '）' if m.get('alias') and m['alias'] != m['id'] else ''}：{m['name']}，参数 {', '.join(m['params'])}" for m in hub.models(mine=True))
     return f"""# vox
 
 > 本地 TTS 服务：统一接口调用多个 TTS 模型。OpenAI 兼容，CLI / HTTP / WebUI 用同一套模型 ID、音色 ID 和参数名。
 
-## 模型
+## 我的模型（能直接调用的）
 {ms}
+全部模型（含未下载、未连接）：GET /api/models；只看我的：?mine=1；只看某家：?provider=
 
 ## 合成（OpenAI 兼容）
 POST {base}v1/audio/speech
@@ -36,8 +37,10 @@ POST {base}v1/audio/speech
 返回音频字节；响应头 X-Vox-Id、X-Vox-Seed、X-Vox-Duration。
 
 ## 原生 API（JSON）
-GET  /api/models                 模型列表与状态（planned / not_downloaded / downloading / ready / loaded）
-POST /api/models/pull {{"model"}}  下载；GET /api/models/pull?model= 查进度
+GET  /api/models                 模型与状态（not_downloaded / downloading / ready / loaded / needs_key），mine 表示在「我的模型」里
+POST /api/models/add {{"model"}} 或 {{"provider","remote"}}   加进我的模型（本地 = 开始下载）；GET /api/models/pull?model= 查下载进度
+POST /api/models/remove {{"model","delete_files"?}}   移出我的模型（本地要 delete_files: true，会删除模型文件）
+POST /api/providers/discover {{"provider"}}   在线查询这家现在提供的模型（本地 = HuggingFace）
 POST /api/models/load | /api/models/unload {{"model"}}
 GET  /api/voices?model=&lang=&gender=&q=   音色库
 POST /api/voices/sample {{"ref": "qwen3:serena"}}   生成 / 取音色样本
@@ -45,12 +48,11 @@ POST /api/speech {{同 /v1/audio/speech}}   返回 JSON：id、request（含实�
 GET  /api/history?limit=&star=   POST /api/history/update {{"id","star"|"delete"}}   POST /api/asr {{"id"}}
 GET/POST /api/my-voices          自定义音色；POST /api/my-voices/delete {{"id"}}
 GET  /api/status                 服务状态、已加载模型、内存
-GET  /api/providers              Provider 与凭证状态；POST /api/keys {{"env","value"}} 保存凭证（不会回显）
-POST /api/providers/discover {{"provider"}}   向 Provider 获取它提供的 TTS 模型（标出清单里已有的）
-POST /api/models/add {{"provider","remote","name"?}} | /api/models/enable {{"model","enabled"}} | /api/models/remove {{"model"}}   管理模型清单
+GET  /api/providers              Provider 与连接状态；POST /api/keys {{"env","value"}} 保存凭证（不会回显）
+GET  /api/registry | POST /api/registry/update   模型注册表版本 / 拉取新版
 
 ## CLI 等价
-vox models --json | vox models fetch gemini | vox models add gemini/<模型> | vox pull qwen3 | vox voices -m qwen3 --json | vox say "你好" -m qwen3 -v serena -i "轻快友好" --json
+vox models --json | vox models --all | vox models fetch openrouter | vox models add <模型 ID> | vox voices -m qwen3 --json | vox say "你好" -m qwen3 -v serena -i "轻快友好" --json
 """
 
 
@@ -128,10 +130,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.wfile.write(body)
         if p == "/v1/models":
             return self._run(lambda: {"object": "list", "data": [
-                {"id": m["id"], "object": "model", "created": 0, "owned_by": m["provider"], "status": m["status"]} for m in hub.models()]}, openai=True)
+                {"id": m["id"], "object": "model", "created": 0, "owned_by": m["provider"], "status": m["status"]} for m in hub.models(mine=True)]}, openai=True)
         routes = {
             "/api/status": hub.status,
-            "/api/models": lambda: hub.models(q.get("provider")),
+            "/api/models": lambda: hub.models(q.get("provider"), {"1": True, "0": False}.get(q.get("mine", ""))),
+            "/api/registry": hub.registry_info,
             "/api/models/pull": lambda: hub.pull_status(q.get("model", "")),
             "/api/voices": lambda: hub.voices(model=q.get("model"), lang=q.get("lang"), gender=q.get("gender"), q=q.get("q")),
             "/api/history": lambda: hub.history(int(q["limit"]) if q.get("limit") else None, {"1": True, "0": False}.get(q.get("star", ""))),
@@ -173,9 +176,9 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/voices/refresh": lambda b: {"model": b.get("model"), "count": hub.refresh_voices(b.get("model", ""))},
             "/api/estimate": lambda b: hub.estimate(hub.normalize(b)),
             "/api/providers/discover": lambda b: hub.discover(b.get("provider", "")),
-            "/api/models/add": lambda b: hub.add_model(b.get("provider", ""), b.get("remote", ""), b.get("name")),
-            "/api/models/remove": lambda b: hub.remove_model(b.get("model", "")),
-            "/api/models/enable": lambda b: hub.set_enabled(b.get("model", ""), bool(b.get("enabled", True))),
+            "/api/models/add": lambda b: hub.add_model(b.get("model"), b.get("provider"), b.get("remote"), b.get("name")),
+            "/api/models/remove": lambda b: hub.remove_model(b.get("model", ""), bool(b.get("delete_files"))),
+            "/api/registry/update": lambda b: hub.registry_update(b.get("url")),
         }
         if p not in routes:
             return self.send_error(404)
