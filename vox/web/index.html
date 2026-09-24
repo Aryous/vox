@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vox</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Cpath d='M7 16h2M11 11v10M15 7v18M19 12v8M23 14v4' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <nav class="side" aria-label="主导航">
+    <a class="logo" href="#/voices" aria-label="vox 首页">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 16h2M10 11v10M15 6v20M20 11v10M25 14v4" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
+      <b>vox</b>
+    </a>
+    <div class="nav">
+      <a href="#/voices" data-route="voices"><i>♪</i><span>音色库</span></a>
+      <a href="#/playground" data-route="playground"><i>▶</i><span>试音台</span></a>
+      <a href="#/models" data-route="models"><i>◫</i><span>模型</span></a>
+      <a href="#/api" data-route="api"><i>{}</i><span>API</span></a>
+    </div>
+    <div class="srv" id="srv" aria-live="polite"></div>
+  </nav>
+
+  <main class="main" id="main" tabindex="-1"></main>
+</div>
+
+<footer class="player" id="player" hidden>
+  <button class="p-play" id="pPlay" type="button" aria-label="播放 / 暂停">▶</button>
+  <div class="p-info"><b id="pTitle"></b><span id="pSub"></span></div>
+  <canvas class="p-wave" id="pWave" height="36" aria-label="播放进度，点击跳转"></canvas>
+  <span class="p-time mono" id="pTime">0:00</span>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

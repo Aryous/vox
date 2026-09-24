@@ -1,0 +1,27 @@
+[project]
+name = "vox"
+version = "0.1.0"
+description = "本地 TTS 命令行：一条命令调用 Kokoro / Qwen3-TTS 生成语音，支持多角色脚本批量合成"
+requires-python = ">=3.10"
+dependencies = [
+  "mlx-audio",
+  "kokoro>=0.8.2",
+  "misaki[zh]>=0.8.2",
+  "soundfile",
+  "numpy",
+  # misaki 英文分词依赖；不预装的话首次运行会尝试自动安装，在非项目目录下会失败
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+[project.scripts]
+vox = "vox.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["vox"]
+
+[tool.setuptools.package-data]
+vox = ["web/*"]
