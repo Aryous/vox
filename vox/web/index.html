@@ -15,10 +15,10 @@
       <b>vox</b>
     </a>
     <div class="nav">
-      <a href="#/voices" data-route="voices"><i>♪</i><span>音色库</span></a>
-      <a href="#/playground" data-route="playground"><i>▶</i><span>试音台</span></a>
-      <a href="#/models" data-route="models"><i>◫</i><span>模型</span></a>
-      <a href="#/api" data-route="api"><i>{}</i><span>API</span></a>
+      <a href="#/voices" data-route="voices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h1.5M7 8v8M11 4v16M15 7.5v9M19 10.5v3M21.5 12H21"/></svg><span>音色库</span></a>
+      <a href="#/playground" data-route="playground"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span>试音台</span></a>
+      <a href="#/models" data-route="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><span>模型</span></a>
+      <a href="#/api" data-route="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/></svg><span>API</span></a>
     </div>
     <div class="srv" id="srv" aria-live="polite"></div>
   </nav>
@@ -27,7 +27,7 @@
 </div>
 
 <footer class="player" id="player" hidden>
-  <button class="p-play" id="pPlay" type="button" aria-label="播放 / 暂停">▶</button>
+  <button class="p-play" id="pPlay" type="button" aria-label="播放 / 暂停"></button>
   <div class="p-info"><b id="pTitle"></b><span id="pSub"></span></div>
   <canvas class="p-wave" id="pWave" height="36" aria-label="播放进度，点击跳转"></canvas>
   <span class="p-time mono" id="pTime">0:00</span>

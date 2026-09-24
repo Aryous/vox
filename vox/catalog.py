@@ -39,7 +39,7 @@ PREFS = HOME / "models.json"            # 用户的模型清单：我的模型�
 
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
 BASE_CAPS = {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True}
-TEMPLATE_DROP = ("id", "alias", "recommended", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
+TEMPLATE_DROP = ("id", "alias", "name", "recommended", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
 
 REG: dict = {}
 PROVIDERS: dict = {}
@@ -116,6 +116,7 @@ def materialize(entry: dict, source: str, templates: dict | None = None) -> dict
             m["repo"] = os.environ[m["repo_env"]]
         if not m.get("id"):
             return None
+    m.setdefault("name", m.get("remote") or m["id"].split("/", 1)[-1])
     m["voices"] = voice_list(m.get("voices"))
     if m["voices"] != "engine":
         m.setdefault("default_voice", (m["voices"][0]["voice"] if m["voices"] else None))

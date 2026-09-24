@@ -20,6 +20,12 @@ from . import catalog, credentials
 from .providers.base import ProviderError, http
 
 HF = "https://huggingface.co"
+MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
+def _plain(text: str, n=280) -> str:
+    """在线列表里的描述常带 Markdown 链接，界面只要纯文本。"""
+    return MD_LINK.sub(r"\1", (text or "").strip())[:n]
 
 
 def supported(pid: str) -> dict | None:
@@ -110,7 +116,7 @@ def openrouter(pid, p, d):
         else:
             price = {"text": f"输入 ${pin * 1e6:g} + 输出 ${pout * 1e6:g} / 百万 token", "unit": "token"}
         vs = m.get("supported_voices") or []
-        out.append({"remote": m["id"], "name": m.get("name") or m["id"], "about": (m.get("description") or "").strip()[:280],
+        out.append({"remote": m["id"], "name": m.get("name") or m["id"], "about": _plain(m.get("description")),
                     "voices": vs, "price": price, "caps": {"voices": bool(vs)}, "homepage": f"https://openrouter.ai/{m['id']}"})
     return out
 
@@ -131,7 +137,7 @@ def openai_models(pid, p, d):
 
 def elevenlabs(pid, p, d):
     _, _, body = http("GET", "https://api.elevenlabs.io/v1/models", {"xi-api-key": _key(p)}, timeout=30)
-    return [{"remote": m["model_id"], "name": m.get("name") or m["model_id"], "about": (m.get("description") or "")[:280]}
+    return [{"remote": m["model_id"], "name": m.get("name") or m["model_id"], "about": _plain(m.get("description"))}
             for m in json.loads(body) if m.get("can_do_text_to_speech")]
 
 
@@ -144,7 +150,7 @@ def gemini(pid, p, d):
         for m in j.get("models", []):
             mid = m.get("name", "").removeprefix("models/")
             if "tts" in mid.lower():
-                out.append({"remote": mid, "name": m.get("displayName") or mid, "about": (m.get("description") or "")[:280]})
+                out.append({"remote": mid, "name": m.get("displayName") or mid, "about": _plain(m.get("description"))})
         token = j.get("nextPageToken")
         if not token:
             break

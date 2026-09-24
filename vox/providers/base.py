@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +19,7 @@ from .. import credentials
 
 CACHE = Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox")) / "voices"
 UA = "vox-tts/0.2 (+https://github.com/Aryous/vox)"
+_PULLING: set[str] = set()   # 正在后台拉音色列表的模型
 
 
 class ProviderError(ValueError):
@@ -76,6 +78,7 @@ class CloudEngine:
     optional: tuple[str, ...] = ()       # 可选的环境变量（如自定义 base URL）
     native_speed = True
     voice_ttl = 86400
+    fail_ttl = 600
 
     def __init__(self, model: dict):
         self.m = model
@@ -104,23 +107,42 @@ class CloudEngine:
         return None
 
     def voices(self, refresh=False) -> list[dict]:
-        """优先用缓存的在线音色列表；没有 Key 或拉取失败时回落到目录里的静态音色。"""
+        """音色列表：先返回手头有的（缓存或注册表里的静态音色），过期了在后台更新，不让页面等网络。
+        refresh=True 时同步拉取并如实报错（给「刷新音色」用）。拉取失败记一笔，10 分钟内不重试。"""
         f = CACHE / f"{self.m['id'].replace('/', '__')}.json"
-        if not refresh and f.exists() and time.time() - f.stat().st_mtime < self.voice_ttl:
+        if refresh:
+            return self._pull_voices(f, raise_errors=True) or self.static_voices()
+        cached = None
+        if f.exists():
             try:
-                return json.loads(f.read_text())
+                cached = json.loads(f.read_text())
             except Exception:
-                pass
-        if self.is_ready():
-            try:
-                vs = self.fetch_voices()
-                if vs:
-                    f.parent.mkdir(parents=True, exist_ok=True)
-                    f.write_text(json.dumps(vs, ensure_ascii=False))
-                    return vs
-            except ProviderError:
-                pass
-        return self.static_voices()
+                cached = None
+        fresh = cached is not None and time.time() - f.stat().st_mtime < self.voice_ttl
+        fail = f.with_suffix(".fail")
+        recently_failed = fail.exists() and time.time() - fail.stat().st_mtime < self.fail_ttl
+        if not fresh and not recently_failed and self.is_ready() and self.m["id"] not in _PULLING:
+            _PULLING.add(self.m["id"])
+            threading.Thread(target=self._pull_voices, args=(f,), daemon=True).start()
+        return cached or self.static_voices()
+
+    def _pull_voices(self, f: Path, raise_errors=False) -> list[dict] | None:
+        fail = f.with_suffix(".fail")
+        try:
+            vs = self.fetch_voices()
+            if vs:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps(vs, ensure_ascii=False))
+                fail.unlink(missing_ok=True)
+            return vs
+        except ProviderError:
+            if raise_errors:
+                raise
+            fail.parent.mkdir(parents=True, exist_ok=True)
+            fail.touch()
+            return None
+        finally:
+            _PULLING.discard(self.m["id"])
 
     # ---- 合成 ----
     def synth(self, req: dict) -> tuple[bytes, str]:

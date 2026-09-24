@@ -6,8 +6,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const ORIGIN = location.origin;
 const GEN_DEFAULT = { temperature: 0.9, top_p: 1, top_k: 50, repetition_penalty: 1.05 };
 const LANGS = ['chinese', 'english', 'japanese', 'korean', 'german', 'french', 'russian', 'portuguese', 'spanish', 'italian', 'auto'];
-const STATUS = { loaded: '已加载', ready: '已下载', not_downloaded: '未下载', downloading: '下载中', planned: '即将支持', unavailable: '不可用', needs_key: '需要 Key' };
-const STATUS_CLOUD = { ready: '可用' };
+const STATUS = { loaded: '已加载', ready: '可用', not_downloaded: '未下载', downloading: '下载中', needs_key: '未连接' };
 const QUICK = ['你好呀，今天过得怎么样？', '我……没问一声，就把 Docker 镜像删了。', '老规矩：先查清，再说明，等你拍板。', 'The quick brown fox jumps over the lazy dog.'];
 
 const store = {
@@ -30,13 +29,36 @@ async function api(path, body) {
 function toast(msg, ms = 2400) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), ms); }
 async function copy(text, what = '已复制') { try { await navigator.clipboard.writeText(text); toast(what); } catch { toast('复制失败，请手动选择'); } }
 
+/* ---------- 图标：线性 SVG，一套笔画（24 视框，1.8 描边） ---------- */
+const IC = {
+  play: '<path d="M8 5.2v13.6a.6.6 0 0 0 .92.5l10.2-6.8a.6.6 0 0 0 0-1L8.92 4.7A.6.6 0 0 0 8 5.2z" fill="currentColor" stroke="none"/>',
+  pause: '<rect x="6.5" y="5" width="3.6" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.9" y="5" width="3.6" height="14" rx="1" fill="currentColor" stroke="none"/>',
+  star: '<path d="M12 3.6l2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.62 6.9 19.3l.98-5.68L3.75 9.6l5.7-.83z"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  ext: '<path d="M14 5h5v5M19 5l-8 8M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.6 4.5L20 16M20 20v-4h-4"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 19h14"/>',
+  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
+  wave: '<path d="M3 12h1.5M7 8v8M11 4v16M15 7.5v9M19 10.5v3M21.5 12H21"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  box: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+  code: '<path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/>',
+  layers: '<path d="M12 4l8.5 4.5L12 13 3.5 8.5z"/><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2.5 2.5M14 9l2 2"/>',
+};
+const ic = (n, size = 16, cls = '') => `<svg class="ic ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
+
 /* ---------- 模型工具 ---------- */
-const M = id => S.models.find(m => m.id === id || m.alias === id);
+const M = id => id ? S.models.find(m => m.id === id || m.alias === id) : undefined;
 const short = m => m?.alias || m?.id;
-const hue = id => { const m = M(id); return m?.provider === 'local' ? `var(--${m.alias})` : `var(--p-${m?.provider || 'cloud'}, var(--cloud))`; };
+const hue = id => { const m = M(id); return m?.provider === 'local' ? `var(--${m.engine || 'cloud'}, var(--cloud))` : `var(--p-${m?.provider || 'cloud'}, var(--cloud))`; };
 const PV = id => S.providers.find(p => p.id === id);
-const MONO = new Set(['openai', 'elevenlabs', 'xiaomimimo']);
-const ICON = { local: 'huggingface', openai: 'openai', inworld: null, elevenlabs: 'elevenlabs', gemini: 'gemini', aliyun: 'bailian', volcengine: 'doubao', minimax: 'minimax', stepfun: 'stepfun', siliconflow: 'siliconcloud', mimo: 'xiaomimimo' };
+const MONO = new Set(['openai', 'elevenlabs', 'xiaomimimo', 'openrouter']);
+const ICON = { local: 'huggingface', openrouter: 'openrouter', openai: 'openai', inworld: null, elevenlabs: 'elevenlabs', gemini: 'gemini', aliyun: 'bailian', volcengine: 'doubao', minimax: 'minimax', stepfun: 'stepfun', siliconflow: 'siliconcloud', mimo: 'xiaomimimo' };
 const LETTER_ICON = { inworld: 'In' };
 /* Provider 图标：LobeHub Icons（MIT）。单色图标用 CSS mask 跟随主题颜色；缺图标的用字母标。 */
 function pIcon(pid, size = 16) {
@@ -45,6 +67,7 @@ function pIcon(pid, size = 16) {
   return MONO.has(f) ? `<span class="pic mono" style="--s:${size}px;--src:url(icons/${f}.svg)" aria-hidden="true"></span>` : `<img class="pic" src="icons/${f}.svg" width="${size}" height="${size}" alt="" aria-hidden="true">`;
 }
 const usable = m => m && ['ready', 'loaded'].includes(m.status);
+const mine = () => S.models.filter(m => m.mine);
 const voiceName = (model, voice) => S.voices.find(v => v.model === model && v.voice === voice)?.name || voice;
 
 /* ---------- 全局播放器 ---------- */
@@ -75,16 +98,17 @@ function play(url, meta, at) {
   const go = () => { if (at != null && P.a.duration) P.a.currentTime = at * P.a.duration; P.a.play().catch(() => {}); };
   P.a.readyState >= 1 ? go() : (P.a.onloadedmetadata = go);
 }
+function setPlayIcon(b, playing) { const st = playing ? 'pause' : 'play'; if (b.dataset.st !== st) { b.dataset.st = st; b.innerHTML = ic(st, b.classList.contains('p-play') ? 16 : 14); } }
 const fmtT = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 (function loop() {
   const prog = P.a.duration ? P.a.currentTime / P.a.duration : 0, playing = !P.a.paused;
   if (P.url) {
-    $('#pPlay').textContent = playing ? '❚❚' : '▶';
+    setPlayIcon($('#pPlay'), playing);
     $('#pTime').textContent = `${fmtT(P.a.currentTime || 0)} / ${fmtT(P.a.duration || 0)}`;
     drawWave($('#pWave'), P.url, prog, P.meta?.color && getComputedStyle($('#player')).getPropertyValue('--m'));
     $$('canvas[data-url]').forEach(cv => { if (cv.dataset.url === P.url || cv._p) { drawWave(cv, cv.dataset.url, cv.dataset.url === P.url ? prog : 0); cv._p = cv.dataset.url === P.url; } });
   }
-  $$('.pb[data-url]').forEach(b => { if (!b.classList.contains('busy')) b.textContent = b.dataset.url === P.url && playing ? '❚❚' : '▶'; });
+  $$('.pb[data-url]').forEach(b => { if (!b.classList.contains('busy')) setPlayIcon(b, b.dataset.url === P.url && playing); });
   $$('.vc').forEach(c => c.classList.toggle('playing', !!P.url && c.dataset.url === P.url && playing));
   setTimeout(loop, playing ? 50 : 300);
 })();
@@ -103,7 +127,7 @@ async function refreshStatus() {
   el.innerHTML = `<div class="row"><span><i class="dot live"></i> 运行中</span><span class="mono">${esc(location.host)}</span></div>
     <div class="row"><span>内存</span><span class="mono">${(s.memory_bytes / 1e9).toFixed(2)} GB</span></div>
     <div class="loaded">${s.loaded.length ? s.loaded.map(id => `<div class="lm" style="--m:${hue(id)}"><i class="dot"></i><span>${esc(M(id)?.name || id)}</span><button type="button" data-unload="${esc(id)}" title="从内存卸载">卸载</button></div>`).join('') : '<span>没有模型在内存中</span>'}</div>`;
-  $$('[data-unload]', el).forEach(b => b.onclick = async () => { await api('/api/models/unload', { model: b.dataset.unload }); toast('已卸载'); await refreshModels(); refreshStatus(); if (S.route === 'models') render(); });
+  $$('[data-unload]', el).forEach(b => b.onclick = async () => { await api('/api/models/unload', { model: b.dataset.unload }); toast('已卸载'); await refreshModels(); refreshStatus(); rerender(); });
 }
 async function refreshModels() { S.models = await api('/api/models'); }
 async function refreshVoices() { S.voices = await api('/api/voices'); }
@@ -124,64 +148,64 @@ window.addEventListener('hashchange', () => { route(); $('#main').focus({ preven
 /* ============ 音色库 ============ */
 function filteredVoices(ignoreLang) {
   const f = ignoreLang === true ? { ...S.vf, lang: '' } : S.vf, q = f.q.trim().toLowerCase();
-  const okModel = v => { const m = M(v.model); return f.model === 'all' || (f.model === 'my' ? v.kind === 'custom' : f.model === 'ready' ? usable(m) : f.model.startsWith('p:') ? m?.provider === f.model.slice(2) && v.kind === 'preset' : v.model === f.model && v.kind === 'preset'); };
+  const okModel = v => { const m = M(v.model); return f.model === 'all' || f.model === 'ready' || (f.model === 'my' ? v.kind === 'custom' : f.model.startsWith('p:') ? m?.provider === f.model.slice(2) && v.kind === 'preset' : v.model === f.model && v.kind === 'preset'); };
   return S.voices.filter(v => okModel(v)
     && (!f.gender || v.gender === f.gender) && (!f.lang || v.lang === f.lang) && (!f.fav || S.settings.favorites.includes(v.ref))
     && (!q || `${v.ref} ${v.name} ${v.description} ${v.lang}`.toLowerCase().includes(q)));
 }
 function pageVoices(main) {
-  const vs = filteredVoices(), f = S.vf, local = S.models.filter(m => m.enabled && m.provider === 'local' && m.caps.voices);
-  const provs = [...new Set(S.models.filter(m => m.enabled && m.provider !== 'local' && m.caps.voices).map(m => m.provider))];
-  const nReady = S.voices.filter(v => usable(M(v.model))).length;
+  const vs = filteredVoices(), f = S.vf, ms = mine().filter(m => m.caps.voices);
+  const local = ms.filter(m => m.provider === 'local'), provs = [...new Set(ms.filter(m => m.provider !== 'local').map(m => m.provider))];
   const langs = [...new Set(filteredVoices(true).map(v => v.lang).filter(Boolean))].slice(0, 14);
-  const nMy = S.voices.filter(v => v.kind === 'custom').length;
+  const nMy = S.voices.filter(v => v.kind === 'custom').length, nPreset = S.voices.length - nMy;
+  const cloudOff = S.providers.filter(p => p.kind === 'cloud' && !p.connected).length;
   main.innerHTML = `
-    <div class="head"><div><h1>音色库</h1><p>${S.voices.length} 个音色，来自 ${local.length} 个本地模型和 ${provs.length} 家云端 Provider；现在能直接听的有 ${nReady} 个。每个音色读同一段样本，点 ▶ 就听。</p></div>
+    <div class="head"><div><h1>音色库</h1><p>${nPreset} 个音色，来自我的 ${ms.length} 个模型，都读同一段样本。${cloudOff ? `<a href="#/models/openrouter">连接云端 Provider</a> 能听到更多。` : ''}</p></div>
       <button class="cli" type="button" data-copy="vox voices --json">vox voices --json</button></div>
-    <div class="sampleline" id="sampleLine"><span>样本文本</span><q>${esc(S.settings.sample_text)}</q><button class="btn ghost sm" type="button" id="editSample">修改</button></div>
+    <div class="sampleline" id="sampleLine"><span class="lbl-i">样本文本</span><q>${esc(S.settings.sample_text)}</q><button class="btn ghost sm" type="button" id="editSample">修改</button></div>
     <div class="filters">
-      <input class="in search" id="vq" placeholder="搜索名字、描述、音色 ID…" value="${esc(f.q)}" aria-label="搜索音色">
-      <div class="seg" role="group" aria-label="按模型筛选">
-        <button type="button" data-fm="all" class="${f.model === 'all' ? 'on' : ''}">全部</button>
-        <button type="button" data-fm="ready" class="${f.model === 'ready' ? 'on' : ''}">能直接听 ${nReady}</button>
-        <button type="button" data-fm="my" class="${f.model === 'my' ? 'on' : ''}">我的 ${nMy || ''}</button>
+      <label class="search">${ic('search', 15)}<input class="in" id="vq" placeholder="搜索名字、描述、音色 ID" value="${esc(f.q)}" aria-label="搜索音色"></label>
+      <div class="seg" role="group" aria-label="音色类型">
+        <button type="button" data-fm="all" class="${f.model !== 'my' ? 'on' : ''}">全部</button>
+        <button type="button" data-fm="my" class="${f.model === 'my' ? 'on' : ''}">自定义${nMy ? ` <span class="n">${nMy}</span>` : ''}</button>
       </div>
-      <select class="in" id="fprov" style="width:auto" aria-label="按模型或 Provider 筛选"><option value="">按来源…</option>
-        <optgroup label="本地">${local.map(m => `<option value="${m.id}" ${f.model === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>
-        <optgroup label="云端">${provs.map(p => `<option value="p:${p}" ${f.model === 'p:' + p ? 'selected' : ''}>${esc(PV(p)?.name || p)}${PV(p)?.ready ? '' : '（需 Key）'}</option>`).join('')}</optgroup></select>
+      <select class="in sel" id="fprov" aria-label="按模型筛选"><option value="">所有模型</option>
+        ${local.length ? `<optgroup label="本地">${local.map(m => `<option value="${m.id}" ${f.model === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
+        ${provs.map(pid => `<optgroup label="${esc(PV(pid)?.name || pid)}"><option value="p:${pid}" ${f.model === 'p:' + pid ? 'selected' : ''}>${esc(PV(pid)?.name || pid)} 全部</option>${ms.filter(m => m.provider === pid).map(m => `<option value="${m.id}" ${f.model === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>`).join('')}</select>
       <div class="seg" role="group" aria-label="按性别筛选">${[['', '不限'], ['女', '女声'], ['男', '男声']].map(([k, t]) => `<button type="button" data-fg="${k}" class="${f.gender === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <button type="button" class="chip ${f.fav ? 'on' : ''}" id="ffav">★ 收藏 ${S.settings.favorites.length}</button>
+      <button type="button" class="chip fav ${f.fav ? 'on' : ''}" id="ffav" aria-pressed="${f.fav}">${ic('star', 13)}收藏 <span class="n">${S.settings.favorites.length}</span></button>
     </div>
-    ${langs.length > 1 ? `<div class="chips" style="margin:-4px 0 14px"><button class="chip ${!f.lang ? 'on' : ''}" data-fl="">所有语言</button>${langs.map(l => `<button class="chip ${f.lang === l ? 'on' : ''}" data-fl="${esc(l)}">${esc(l)}</button>`).join('')}</div>` : ''}
+    ${langs.length > 1 ? `<div class="chips langs"><button class="chip ${!f.lang ? 'on' : ''}" data-fl="">所有语言</button>${langs.map(l => `<button class="chip ${f.lang === l ? 'on' : ''}" data-fl="${esc(l)}">${esc(l)}</button>`).join('')}</div>` : ''}
     <div class="grid" id="vgrid"></div>
     <div class="more" id="more"></div>`;
   const grid = $('#vgrid', main);
-  if (!vs.length) grid.outerHTML = `<div class="empty"><b>${f.model === 'my' ? '还没有自定义音色' : '没有符合条件的音色'}</b>${f.model === 'my' ? '在试音台调好声音后，点「存为我的音色」，就会出现在这里。' : '换个筛选条件试试。'}</div>`;
+  if (!vs.length) grid.outerHTML = f.model === 'my' ? '<div class="empty"><b>还没有自定义音色</b>在试音台调好声音后，点「存为我的音色」，就会出现在这里。</div>'
+    : S.voices.length ? '<div class="empty"><b>没有符合条件的音色</b>换个筛选条件试试。</div>'
+    : '<div class="empty"><b>还没有能用的模型</b>去<a href="#/models/local">下载一个本地模型</a>，或<a href="#/models/openrouter">连接云端 Provider</a>。</div>';
   else grid.innerHTML = vs.slice(0, S.vlimit).map(voiceCard).join('');
   if (vs.length > S.vlimit) $('#more', main).innerHTML = `<button class="btn" type="button" id="moreBtn">再显示 ${Math.min(60, vs.length - S.vlimit)} 个（共 ${vs.length}）</button>`;
   bindVoices(main, vs);
 }
 function voiceCard(v) {
   const m = M(v.model), ok = usable(m), fav = S.settings.favorites.includes(v.ref);
+  const tags = [v.gender ? `${v.gender}声` : '', v.lang, v.kind === 'custom' ? '自定义' : ''].filter(Boolean);
   return `<article class="vc" style="--m:${hue(v.model)}" data-ref="${esc(v.ref)}" data-url="${esc(v.sample.url)}">
     <div class="vc-top">
-      <button class="pb" type="button" data-sample="${esc(v.ref)}" data-url="${esc(v.sample.url)}" ${ok ? '' : 'disabled'} aria-label="试听 ${esc(v.name)}">▶</button>
-      <div class="vc-name"><b>${esc(v.name)}</b><code>${esc(v.ref)}</code></div>
+      <button class="pb" type="button" data-sample="${esc(v.ref)}" data-url="${esc(v.sample.url)}" ${ok ? '' : 'disabled'} aria-label="试听 ${esc(v.name)}">${ic('play', 14)}</button>
+      <div class="vc-name"><b>${esc(v.name)}</b><code title="${esc(m?.name || v.model)}">${esc(v.ref)}</code></div>
+      <button class="star ${fav ? 'on' : ''}" type="button" data-fav="${esc(v.ref)}" aria-pressed="${fav}" aria-label="收藏 ${esc(v.name)}">${ic('star', 16)}</button>
     </div>
-    <div class="chips">${v.gender ? `<span class="tag">${v.gender}声</span>` : ''}${v.lang ? `<span class="tag">${esc(v.lang)}</span>` : ''}${v.kind === 'custom' ? '<span class="tag">自定义</span>' : ''}</div>
-    <p>${esc(v.description)}</p>
+    <p>${esc(v.description) || '<span class="mute">没有描述</span>'}</p>
     <canvas class="mini" data-url="${esc(v.sample.url)}" ${v.sample.cached ? '' : 'hidden'}></canvas>
     <div class="vc-foot">
-      <span class="mtag">${m && m.provider !== 'local' ? pIcon(m.provider) : '<i class="dot"></i>'}<span>${esc(m?.name || v.model)}</span></span>
-      <button class="star ${fav ? 'on' : ''}" type="button" data-fav="${esc(v.ref)}" aria-label="收藏">${fav ? '★' : '☆'}</button>
-      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音 →</a>` : m?.provider !== 'local' ? `<a class="btn sm" href="#/models/${m?.provider}" data-focus>配置 Key</a>` : `<a class="btn sm" href="#/models/local">先下载模型</a>`}
+      <span class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>
+      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音${ic('arrow', 13)}</a>` : `<a class="btn sm" href="#/models/${m?.provider || 'local'}">${m ? '模型不可用' : '模型已移除'}</a>`}
     </div></article>`;
 }
 function bindVoices(main, vs) {
   $('#vq', main).oninput = e => { S.vf.q = e.target.value; store.set('vf', S.vf); clearTimeout(S._vq); S._vq = setTimeout(() => { S.vlimit = 60; pageVoices(main); $('#vq', main).focus(); const i = $('#vq', main); i.setSelectionRange(i.value.length, i.value.length); }, 180); };
   $$('[data-fm]', main).forEach(b => b.onclick = () => { S.vf.model = b.dataset.fm; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); });
   $('#fprov', main).onchange = e => { S.vf.model = e.target.value || 'all'; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); };
-  $$('[data-focus]', main).forEach(a => a.onclick = () => { S.focusKey = true; });
   $$('[data-fg]', main).forEach(b => b.onclick = () => { S.vf.gender = b.dataset.fg; store.set('vf', S.vf); pageVoices(main); });
   $$('[data-fl]', main).forEach(b => b.onclick = () => { S.vf.lang = b.dataset.fl; store.set('vf', S.vf); pageVoices(main); });
   $('#ffav', main).onclick = () => { S.vf.fav = !S.vf.fav; store.set('vf', S.vf); pageVoices(main); };
@@ -193,7 +217,7 @@ function bindVoices(main, vs) {
   $$('canvas.mini:not([hidden])', main).forEach(cv => drawWave(cv, cv.dataset.url));
   $('#editSample', main).onclick = () => {
     const line = $('#sampleLine', main);
-    line.innerHTML = `<span>样本文本</span><input class="in" id="sampleIn" value="${esc(S.settings.sample_text)}"><button class="btn primary sm" type="button" id="saveSample">保存</button><button class="btn ghost sm" type="button" id="cancelSample">取消</button><span style="width:100%;font-size:12px;color:var(--mute)">{name} 会替换成音色名字。改动后，样本在下次试听时按新文本重新生成。</span>`;
+    line.innerHTML = `<span class="lbl-i">样本文本</span><input class="in" id="sampleIn" value="${esc(S.settings.sample_text)}"><button class="btn primary sm" type="button" id="saveSample">保存</button><button class="btn ghost sm" type="button" id="cancelSample">取消</button><span style="width:100%;font-size:12px;color:var(--mute)">{name} 会替换成音色名字。改动后，样本在下次试听时按新文本重新生成。</span>`;
     $('#sampleIn', line).focus();
     $('#cancelSample', line).onclick = () => pageVoices(main);
     $('#saveSample', line).onclick = async () => { S.settings = await api('/api/settings', { sample_text: $('#sampleIn', line).value.trim() }); await refreshVoices(); pageVoices(main); toast('样本文本已更新'); };
@@ -203,7 +227,7 @@ async function playSample(ref, btn) {
   const v = S.voices.find(x => x.ref === ref); if (!v) return;
   const meta = { title: v.name, sub: `${v.ref} · 样本`, color: hue(v.model) };
   if (v.sample.cached) return play(v.sample.url, meta);
-  const others = $$(`.pb[data-sample="${CSS.escape(ref)}"]`); others.forEach(b => { b.classList.add('busy'); b.textContent = ''; });
+  const others = $$(`.pb[data-sample="${CSS.escape(ref)}"]`); others.forEach(b => { b.classList.add('busy'); b.innerHTML = ''; b.dataset.st = ''; });
   const m = M(v.model), slow = m && m.provider === 'local' && m.status !== 'loaded';
   toast(m?.provider !== 'local' ? `正在用 ${PV(m.provider)?.name || m.provider} 生成样本（云端计费，${estimateLocal({ model: m.id, input: S.settings.sample_text }) || '按官方价格'}）…` : slow ? `第一次用 ${m.name}，正在加载模型并生成样本…` : '正在生成样本…', 4000);
   try {
@@ -216,8 +240,8 @@ async function playSample(ref, btn) {
 async function toggleFav(ref, btn) {
   const f = new Set(S.settings.favorites); f.has(ref) ? f.delete(ref) : f.add(ref);
   S.settings = await api('/api/settings', { favorites: [...f] });
-  if (btn) { const on = S.settings.favorites.includes(ref); btn.classList.toggle('on', on); btn.textContent = on ? '★' : '☆'; }
-  const ff = $('#ffav'); if (ff) ff.textContent = `★ 收藏 ${S.settings.favorites.length}`;
+  if (btn) { const on = S.settings.favorites.includes(ref); btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); }
+  const ff = $('#ffav .n'); if (ff) ff.textContent = S.settings.favorites.length;
 }
 const ensureSlots = () => { if (!S.slots || !S.slots.length) S.slots = [newSlot()]; };
 function tryVoice(ref) {
@@ -228,7 +252,7 @@ function tryVoice(ref) {
 
 /* ============ 试音台 ============ */
 function newSlot(p = {}) {
-  const model = M(p.model)?.id || (S.models.find(m => m.enabled && usable(m) && m.caps.voices) || S.models[0])?.id;
+  const model = M(p.model)?.id || (mine().find(m => usable(m) && m.caps.voices) || mine()[0] || S.models[0])?.id;
   const m = M(model);
   return { model, voice: p.voice || m?.default_voice || '', instructions: p.instructions || '', speed: p.speed ?? 1, seedMode: p.seed != null ? 'fixed' : 'random',
     seed: p.seed ?? Math.floor(Math.random() * 1e6), lang: p.lang || 'chinese', ...GEN_DEFAULT, ...Object.fromEntries(Object.keys(GEN_DEFAULT).filter(k => p[k] != null).map(k => [k, p[k]])) };
@@ -277,12 +301,12 @@ function pagePlayground(main) {
           <textarea class="in" id="text" aria-label="要合成的文本" placeholder="输入要合成的文字…">${esc(S.text)}</textarea>
           <div class="chips">${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}">${esc(q.length > 16 ? q.slice(0, 16) + '…' : q)}</button>`).join('')}</div>
           <div class="compose-bar"><span class="count" id="count"></span><span class="sp"></span><span class="count" id="hint"></span>
-            <button class="btn primary lg" type="button" id="gen">生成${n > 1 ? ` ${n} 路` : ''} <kbd style="color:inherit;border-color:currentColor;opacity:.6">⌘↵</kbd></button></div>
+            <button class="btn primary lg" type="button" id="gen">生成${n > 1 ? ` ${n} 路` : ''} <kbd>⌘↵</kbd></button></div>
         </div>
         <div class="equiv" id="equiv"></div>
         <div class="feed-head"><h2>结果</h2><span class="sp"></span>
           <label class="chip ${S.autoAsr ? 'on' : ''}" style="cursor:pointer"><input type="checkbox" id="autoAsr" ${S.autoAsr ? 'checked' : ''} hidden> 自动读音校对</label>
-          <button type="button" class="chip ${S.feedStar ? 'on' : ''}" id="feedStar">★ 只看收藏</button></div>
+          <button type="button" class="chip fav ${S.feedStar ? 'on' : ''}" id="feedStar" aria-pressed="${S.feedStar}">${ic('star', 13)}只看收藏</button></div>
         <div class="feed" id="feed"></div>
       </section>
     </div>`;
@@ -301,10 +325,9 @@ function updateCompose(main) {
   const slots = S.compare ? S.slots : [slot()], bad = slots.find(s => !usable(M(s.model)));
   const design = slots.find(s => M(s.model).caps.design && !s.instructions.trim());
   const bm = bad && M(bad.model), cloudBad = bm && bm.provider !== 'local';
-  const hint = !S.text.trim() ? '先输入文字' : bad ? (cloudBad ? `${PV(bm.provider)?.name || bm.provider} 还没配置 Key` : `${bm.name} 还没下载`) : design ? '声音设计模型需要先写声音描述' : '';
+  const hint = !S.text.trim() ? '先输入文字' : bad ? (cloudBad ? `${PV(bm.provider)?.name || bm.provider} 还没连接` : `${bm.name} 还没下载`) : design ? '声音设计模型需要先写声音描述' : '';
   const cost = !hint ? slots.map(s => estimateLocal(reqOf(s))).filter(Boolean) : [];
-  $('#hint', main).innerHTML = bad && S.text.trim() ? `${esc(hint)} · <a href="#/models/${cloudBad ? bm.provider : 'local'}" data-focus>${cloudBad ? '去配置' : '去下载'}</a>` : hint ? esc(hint) : cost.length ? `预估 ${cost.map(esc).join(' + ')}` : '';
-  $$('#hint [data-focus]', main).forEach(a => a.onclick = () => { S.focusKey = true; });
+  $('#hint', main).innerHTML = bad && S.text.trim() ? `${esc(hint)} · <a href="#/models/${cloudBad ? bm.provider : 'local'}">${cloudBad ? '去连接' : '去下载'}</a>` : hint ? esc(hint) : cost.length ? `预估 ${cost.map(esc).join(' + ')}` : '';
   $('#gen', main).disabled = !!hint;
   renderEquiv(main);
 }
@@ -325,14 +348,14 @@ function renderPanel(main) {
     ${S.compare ? `<div class="slots">${S.slots.map((x, i) => `<button type="button" class="slot ${i === S.cur ? 'on' : ''}" data-slot="${i}" style="--m:${hue(x.model)}"><i class="dot"></i>${LETTER(i)}</button>`).join('')}
       ${S.slots.length < 6 ? '<button type="button" class="btn ghost sm" id="addSlot">+ 通道</button>' : ''}${S.slots.length > 1 ? `<button type="button" class="btn ghost sm" id="delSlot" style="margin-left:auto">删除 ${LETTER(S.cur)}</button>` : ''}</div>` : ''}
     <div class="field"><div class="lbl"><span>模型</span><span class="key">model</span></div>
-      <select class="in" id="pModel">${[...new Set(S.models.filter(x => x.enabled || x.id === m.id).map(x => x.provider))].map(pid => `<optgroup label="${pid === 'local' ? '本地' : esc(PV(pid)?.name || pid)}">${S.models.filter(x => x.provider === pid && (x.enabled || x.id === m.id)).map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.name)}${usable(x) ? '' : ` · ${STATUS[x.status]}`}</option>`).join('')}</optgroup>`).join('')}</select>
+      <select class="in" id="pModel">${[...new Set(S.models.filter(x => x.mine || x.id === m.id).map(x => x.provider))].map(pid => `<optgroup label="${pid === 'local' ? '本地' : esc(PV(pid)?.name || pid)}">${S.models.filter(x => x.provider === pid && (x.mine || x.id === m.id)).map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.name)}${usable(x) ? '' : ` · ${STATUS[x.status]}`}</option>`).join('')}</optgroup>`).join('')}</select>
       <div class="cap">${[['voices', '预置音色'], ['instructions', '情绪指令'], ['design', '声音设计'], ['seed', '可复现']].map(([k, t]) => `<span class="${c[k] ? 'y' : 'n'}">${t}</span>`).join('')}</div>
-      ${usable(m) ? '' : m.provider !== 'local' ? `<div class="err">${esc(PV(m.provider)?.name || m.provider)} 还没配置 Key。<a href="#/models/${m.provider}" data-focus>去配置</a>，或运行 <code>vox keys set ${esc(m.key_env)}</code></div>` : `<div class="err">模型还没下载。<a href="#/models/local">去模型页下载</a>，或运行 <code>vox pull ${esc(short(m))}</code></div>`}
+      ${usable(m) ? '' : m.provider !== 'local' ? `<div class="err">${esc(PV(m.provider)?.name || m.provider)} 还没连接。<a href="#/models/${m.provider}">去填 Key</a>，或运行 <code>vox keys set ${esc(m.key_env)}</code></div>` : `<div class="err">模型还没下载。<a href="#/models/local">去模型页下载</a>，或运行 <code>vox models add ${esc(short(m))}</code></div>`}
       ${m.price ? `<span style="font-size:12px;color:var(--mute)">${m.provider === 'local' ? '' : '计费：' + priceText(m)}</span>` : ''}</div>
     ${my.length ? `<div class="field"><div class="lbl"><span>从我的音色载入</span></div><select class="in" id="pMy"><option value="">选择…</option>${my.map(v => `<option value="${esc(v.ref)}">${esc(v.name)}</option>`).join('')}</select></div>` : ''}
     ${has('voice') ? `<div class="field"><div class="lbl"><span>音色</span><span class="key">voice</span></div>
       <div class="vrow"><select class="in" id="pVoice">${vs.map(v => `<option value="${esc(v.voice)}" ${v.voice === s.voice ? 'selected' : ''}>${esc(v.name)}${v.gender ? ` · ${v.gender}` : ''}${v.lang && v.lang !== '中文' ? ` · ${esc(v.lang)}` : ''}</option>`).join('')}</select>
-      <button class="pb" type="button" id="pPreview" data-url="${esc(vs.find(v => v.voice === s.voice)?.sample.url || '')}" ${usable(m) ? '' : 'disabled'} title="试听这个音色的样本">▶</button></div>
+      <button class="pb" type="button" id="pPreview" data-url="${esc(vs.find(v => v.voice === s.voice)?.sample.url || '')}" ${usable(m) ? '' : 'disabled'} title="试听这个音色的样本" aria-label="试听音色样本">${ic('play', 13)}</button></div>
       <span style="font-size:12px;color:var(--mute)">${esc(vs.find(v => v.voice === s.voice)?.description || '')}</span></div>` : ''}
     ${has('instructions') ? `<div class="field"><div class="lbl"><span>${c.design ? '声音描述（必填）' : '情绪 / 语气'}</span><span class="key">instructions</span></div>
       <textarea class="in" id="pInstr" rows="2" placeholder="${c.design ? '例如：三十岁左右的男声，温和真诚' : m.instr_enum ? '只能选下面的情绪之一' : m.provider === 'inworld' ? '必须用英文，例如 speak warmly and slowly' : '留空为自然语气；例如：轻快友好'}">${esc(s.instructions)}</textarea>
@@ -397,7 +420,7 @@ function renderFeed(main) {
   const seen = new Set(S.runs.flatMap(r => r.takes.map(t => t.rec?.id)));
   const runs = [...S.runs, ...S.hist.filter(h => !seen.has(h.id)).slice(0, 40).map(h => ({ id: h.id, text: h.request.input, ts: h.ts * 1000, takes: [{ label: '', req: h.request, rec: h }] }))]
     .filter(r => !S.feedStar || r.takes.some(t => t.rec?.star));
-  feed.innerHTML = runs.length ? runs.map(runHtml).join('') : `<div class="empty"><b>${S.feedStar ? '还没有收藏的结果' : '还没有生成过'}</b>${S.feedStar ? '点结果上的 ☆ 收藏。' : '在上面输入一句话，按 ⌘↵ 生成；或者先去<a href="#/voices">音色库</a>挑一个声音。'}</div>`;
+  feed.innerHTML = runs.length ? runs.map(runHtml).join('') : `<div class="empty"><b>${S.feedStar ? '还没有收藏的结果' : '还没有生成过'}</b>${S.feedStar ? '点结果上的「收藏」。' : '在上面输入一句话，按 ⌘↵ 生成；或者先去<a href="#/voices">音色库</a>挑一个声音。'}</div>`;
   $$('canvas.wave', feed).forEach(cv => drawWave(cv, cv.dataset.url));
   feed.onclick = e => {
     const b = e.target.closest('[data-act]'); if (!b) return;
@@ -424,11 +447,11 @@ function takeHtml(t) {
   if (!t.rec) return `<div class="take pending" style="--m:${hue(r.model)}">${head}<span>${esc(t.pending || '排队中…')}</span></div>`;
   const h = t.rec, url = `/clips/${h.id}.wav`, rtf = h.elapsed / Math.max(h.dur, 0.01);
   return `<div class="take" style="--m:${hue(r.model)}">${head}
-    <div class="take-w"><button class="pb" type="button" data-act="play" data-id="${h.id}" data-url="${url}" aria-label="播放">▶</button><canvas class="wave" data-url="${url}" data-id="${h.id}"></canvas></div>
+    <div class="take-w"><button class="pb" type="button" data-act="play" data-id="${h.id}" data-url="${url}" aria-label="播放">${ic('play', 13)}</button><canvas class="wave" data-url="${url}" data-id="${h.id}"></canvas></div>
     <div class="meta"><span><b>${h.dur.toFixed(2)}s</b></span><span>合成 ${h.elapsed}s</span><span title="合成耗时 ÷ 音频时长，小于 1 表示比实时快">RTF ${rtf.toFixed(2)}</span>${r.speed ? `<span>${r.speed}×</span>` : ''}${r.seed != null ? `<span>种子 ${r.seed}</span>` : ''}${h.cached ? '<span>缓存</span>' : ''}${h.source && h.source !== 'webui' ? `<span>来自 ${esc(h.source)}</span>` : ''}${h.cost?.amount != null ? `<span title="${esc(h.cost.text)}">${h.cost.currency === 'CNY' ? '¥' : '$'}${h.cost.amount.toFixed(4)}</span>` : ''}${h.reproducible === false ? '<span title="这家 Provider 不支持随机种子，同样参数再生成可能不同">不可复现</span>' : ''}</div>
     <div class="asr" id="asr-${h.id}">${asrHtml(h)}</div>
     <div class="acts">
-      <button class="btn ghost sm" type="button" data-act="star" data-id="${h.id}">${h.star ? '★ 已收藏' : '☆ 收藏'}</button>
+      <button class="btn ghost sm fav ${h.star ? 'on' : ''}" type="button" data-act="star" data-id="${h.id}" aria-pressed="${!!h.star}">${ic('star', 14)}${h.star ? '已收藏' : '收藏'}</button>
       <button class="btn ghost sm" type="button" data-act="reuse" data-id="${h.id}">用这套参数</button>
       <button class="btn ghost sm" type="button" data-act="save" data-id="${h.id}">存为我的音色</button>
       ${h.asr ? '' : `<button class="btn ghost sm" type="button" data-act="asr" data-id="${h.id}">读音校对</button>`}
@@ -461,106 +484,180 @@ async function runAsr(id, main) {
 }
 
 /* ============ 模型：左侧 Provider，右侧它的模型 ============ */
-// Provider 只管连接（Key、地址），模型是清单里的条目：启用后进入音色库和试音台；可以从 Provider 获取更多，或手动添加。
-const PSTATE = p => p.id === 'local' ? { cls: 'ok', t: '本机' } : p.ready ? { cls: 'ok', t: '已连接' } : { cls: '', t: '未配置' };
+// 「能不能用」是系统事实（本地下没下载、云端连没连上），不给开关；「我的模型」= 能用的模型里你留下的，音色库和试音台只显示这些。
+const GROUPS = [['local', '本地'], ['aggregator', '聚合'], ['cloud', '云端']];
+const pGroup = p => p.kind === 'local' ? 'local' : p.region === '聚合' ? 'aggregator' : 'cloud';
+const ago = t => { const d = Date.now() / 1000 - t; return d < 60 ? '刚刚' : d < 3600 ? `${Math.floor(d / 60)} 分钟前` : d < 86400 ? `${Math.floor(d / 3600)} 小时前` : `${Math.floor(d / 86400)} 天前`; };
+const fmtN = n => n >= 1e4 ? `${(n / 1e4).toFixed(1).replace(/\.0$/, '')} 万` : n.toLocaleString();
+S.disc = {}; S.mq = {}; S.keyEdit = null;
+
 function pageModels(main) {
-  const ps = S.providers, pid = PV(S.sub) ? S.sub : (ps.find(p => p.id !== 'local' && p.ready) || ps[0]).id;
-  if (S.sub !== pid) history.replaceState(null, '', `#/models/${pid}`);
-  S.sub = pid;
-  const side = g => ps.filter(p => (p.id === 'local') === (g === 'local')).map(p => { const st = PSTATE(p);
-    return `<a class="pv ${p.id === pid ? 'on' : ''}" href="#/models/${p.id}" ${p.id === pid ? 'aria-current="page"' : ''}>${pIcon(p.id, 20)}<span class="pv-n">${esc(p.name)}</span>
-      <span class="pv-s"><i class="dot ${st.cls ? 'live' : ''}" title="${st.t}"></i>${p.enabled.length}/${p.models.length}</span></a>`; }).join('');
+  const ps = S.providers, sub = S.sub === 'mine' || PV(S.sub) ? S.sub : 'mine';
+  if (S.sub !== sub) history.replaceState(null, '', `#/models/${sub}`);
+  S.sub = sub;
+  const item = p => `<a class="pv ${p.id === sub ? 'on' : ''}" href="#/models/${p.id}" ${p.id === sub ? 'aria-current="page"' : ''}>${pIcon(p.id, 18)}<span class="pv-n">${esc(p.name)}</span>
+    ${p.mine ? `<span class="pv-c">${p.mine}</span>` : ''}<i class="st ${p.connected ? 'on' : ''}" title="${p.kind === 'local' ? '本机' : p.connected ? '已连接' : '未连接'}"></i></a>`;
   main.innerHTML = `
-    <div class="head"><div><h1>模型</h1><p>左边选 Provider，右边管理它的模型。启用的模型会出现在音色库和试音台里，所有模型走同一套接口。</p></div>
-      <button class="cli" type="button" data-copy="vox models --json">vox models --json</button></div>
+    <div class="head"><div><h1>模型</h1><p>「我的模型」是能直接用的：本地已下载的，和已连接 Provider 里添加的。音色库和试音台只用它们。</p></div>
+      <button class="cli" type="button" data-copy="vox models">vox models</button></div>
     <div class="mp">
       <nav class="mp-side" aria-label="Provider">
-        <div class="mp-g">本地</div>${side('local')}
-        <div class="mp-g">云端 <span class="count">${ps.filter(p => p.id !== 'local' && p.ready).length}/${ps.length - 1} 已连接</span></div>${side('cloud')}
+        <a class="pv ${sub === 'mine' ? 'on' : ''}" href="#/models/mine" ${sub === 'mine' ? 'aria-current="page"' : ''}>${ic('layers', 18)}<span class="pv-n">我的模型</span><span class="pv-c">${mine().length}</span></a>
+        ${GROUPS.map(([g, t]) => { const list = ps.filter(p => pGroup(p) === g);
+          return list.length ? `<div class="mp-g"><span>${t}</span>${g === 'cloud' ? `<span>${list.filter(p => p.connected).length}/${list.length} 已连接</span>` : ''}</div>${list.map(item).join('')}` : ''; }).join('')}
+        <div class="mp-foot" id="regInfo"></div>
       </nav>
       <section class="mp-main" id="pd"></section>
     </div>`;
   $('[data-copy]', main).onclick = e => copy(e.currentTarget.dataset.copy, '已复制命令');
-  renderProvider($('#pd', main));
+  const pd = $('#pd', main);
+  sub === 'mine' ? renderMine(pd) : renderProvider(pd);
+  api('/api/registry').then(r => {
+    const el = $('#regInfo', main); if (!el) return;
+    el.innerHTML = `<span title="模型元数据（能力、价格、音色）来自注册表；vox models update 拉新版">注册表 ${esc(r.updated)} · ${r.from === 'builtin' ? '内置' : '已更新'}</span>`;
+  }).catch(() => {});
   if (S.models.some(m => m.status === 'downloading')) pollPull(main);
 }
-function renderProvider(el) {
-  const p = PV(S.sub), local = p.id === 'local', ms = S.models.filter(m => m.provider === p.id), st = PSTATE(p);
-  const disc = S.disc?.pid === p.id ? S.disc : null;
-  const listBtn = local ? '' : p.can_list_models
-    ? `<button class="btn ${p.ready && !ms.some(m => m.custom) ? 'primary' : ''}" type="button" id="dFetch" ${p.ready ? '' : 'disabled title="先配置 Key"'}>获取模型列表</button>`
-    : `<span class="count" title="这家没有公开的模型列表接口">不提供模型列表接口，可手动添加</span>`;
+function renderMine(el) {
+  const my = mine(), pids = [...new Set(my.map(m => m.provider))], nl = my.filter(m => m.provider === 'local').length;
   el.innerHTML = `
-    <div class="pd-h">${pIcon(p.id, 36)}<div><h2>${esc(p.name)}</h2><span class="count">${local ? esc(p.about) : `${esc(p.region || '')} · ${ms.length} 个模型`}</span></div>
-      <span class="sp"></span><span class="pill ${st.cls ? 'loaded' : 'needs_key'}">${st.t}</span></div>
-    ${local ? `<div class="pd-sec"><h3>存储</h3><p class="count">模型下载到 <code>${esc(S.status?.home || '~/.cache/vox')}/models</code>，默认走 ModelScope 镜像，逐个文件按 HuggingFace 哈希校验。Kokoro 首次合成时自动下载。</p></div>` : `
-    <div class="pd-sec"><h3>连接 <span class="sp"></span><a href="${esc(p.console)}" target="_blank" rel="noopener">申请 Key ↗</a><a href="${esc(p.docs)}" target="_blank" rel="noopener">API 文档 ↗</a></h3>
-      ${p.credentials.map(c => keyField(p, c, false)).join('')}
-      ${p.optional.length ? `<details class="adv"><summary>可选设置</summary>${p.optional.map(c => keyField(p, c, true)).join('')}</details>` : ''}
-      <details class="adv"><summary>Key 存在哪里？</summary><div class="keynote">两种方式都行，<b>环境变量优先</b>：
-        <ul><li><b>在这里粘贴</b>：保存到本机 <code>~/.config/vox/credentials.json</code>（权限 600），立即生效。</li>
-        <li><b>环境变量</b>：如 <code>export ${esc(p.credentials[0]?.env)}=…</code>。适合终端、脚本、Agent 和 CI，会覆盖这里保存的值。</li></ul>
-        Key 不会通过 API 返回，也不写进日志；页面只显示末 4 位。命令行：<code>vox keys set ${esc(p.credentials[0]?.env)}</code></div></details>
-    </div>`}
-    <div class="pd-sec"><h3>模型 <span class="count">已启用 ${ms.filter(m => m.enabled).length} / ${ms.length}</span><span class="sp"></span>
-      ${listBtn}${local ? '' : `<button class="btn" type="button" id="dAddT">手动添加</button>`}</h3>
-      ${local ? '' : `<form class="kform" id="dAdd" ${S.addOpen === p.id ? '' : 'hidden'}><input class="in mono" placeholder="${esc(p.id)} 的模型 ID，如 ${esc(ms[0]?.remote || 'model-name')}" aria-label="模型 ID" spellcheck="false"><button class="btn primary" type="submit">添加</button></form>`}
-      ${disc ? discHtml(disc) : ''}
-      ${!local && !p.ready ? `<p class="count pd-tip">下面是 vox 预置的模型。配好 Key 后即可使用${p.can_list_models ? '，也可以点「获取模型列表」看看这家现在还提供哪些' : ''}。</p>` : ''}
-      <div class="mlist">${ms.map(modelCard).join('')}</div>
-    </div>`;
-  bindProvider(el, p);
-  if (S.focusKey) { $('.kform input', el)?.focus(); S.focusKey = false; }
+    <div class="pd-h"><span class="pd-ic">${ic('layers', 22)}</span><div><h2>我的模型</h2><p>${my.length ? `${my.length} 个模型可以直接用：本地 ${nl} 个，云端 ${my.length - nl} 个。` : '还没有能直接用的模型。'}</p></div></div>
+    ${my.length ? pids.map(pid => `<section class="sec"><div class="sec-h"><h3>${pIcon(pid, 16)}${esc(PV(pid)?.name || pid)}</h3><span class="n">${my.filter(m => m.provider === pid).length}</span><span class="sp"></span>
+        <a class="btn ghost sm" href="#/models/${pid}">管理${ic('arrow', 13)}</a></div><div class="mlist">${my.filter(m => m.provider === pid).map(modelRow).join('')}</div></section>`).join('')
+      : `<div class="empty"><b>从这里开始</b>下载一个<a href="#/models/local">本地模型</a>，下载后完全离线运行；或者连接一家云端 Provider，比如 <a href="#/models/openrouter">OpenRouter</a>，一个 Key 就能用它的全部 TTS 模型。</div>`}`;
+  bindRows(el);
 }
-function discHtml(d) {
-  if (d.loading) return '<div class="disc"><span class="count">正在向 Provider 查询…</span></div>';
-  if (d.error) return `<div class="disc"><div class="err">${esc(d.error)}</div></div>`;
-  const fresh = d.items.filter(r => !r.added);
-  return `<div class="disc"><div class="disc-h"><b>Provider 现在提供 ${d.items.length} 个 TTS 模型</b><span class="count">${fresh.length ? `其中 ${fresh.length} 个不在清单里` : '都已在清单里'}</span><span class="sp"></span><button class="btn ghost sm" type="button" data-dclose>收起</button></div>
-    ${d.items.map(r => `<div class="disc-r"><code>${esc(r.remote)}</code><span class="count">${esc(r.name && r.name !== r.remote ? r.name : '')}${r.description ? ' · ' + esc(r.description) : ''}</span><span class="sp"></span>
-      ${r.added ? '<span class="count">已在清单</span>' : `<button class="btn sm" type="button" data-dadd="${esc(r.remote)}" data-dname="${esc(r.name || '')}">添加</button>`}</div>`).join('')}</div>`;
+function renderProvider(el) {
+  const p = PV(S.sub), local = p.kind === 'local', ms = S.models.filter(m => m.provider === p.id);
+  const my = ms.filter(m => m.mine), avail = ms.filter(m => !m.mine), rec = ms.filter(m => m.recommended).length;
+  const d = p.discover, st = S.disc[p.id], busy = st === 'loading', err = st && st !== 'loading' ? st : null;
+  const q = (S.mq[p.id] || '').trim().toLowerCase(), shown = q ? avail.filter(m => `${m.id} ${m.name}`.toLowerCase().includes(q)) : avail;
+  const canFetch = d && (d.public || p.connected), src = local ? 'HuggingFace' : p.name;
+  const note = !d ? '这家没有公开的模型列表接口，列表来自 vox 注册表' : d.fetched ? `${ago(d.fetched)}从 ${esc(src)} 查询` : canFetch ? `可以从 ${esc(src)} 查询完整列表` : '连接后可以在线查询完整列表';
+  el.innerHTML = `
+    <div class="pd-h">${pIcon(p.id, 32)}<div><h2>${esc(p.name)}</h2><p>${esc(p.about || `${p.region || ''}云端 TTS`)}</p></div><span class="sp"></span>
+      ${local ? '' : `<a class="lnk" href="${esc(p.docs)}" target="_blank" rel="noopener">API 文档${ic('ext', 13)}</a>`}</div>
+    ${local ? '' : connHtml(p)}
+    <section class="sec"><div class="sec-h"><h3>我的模型</h3><span class="n">${my.length}</span></div>
+      ${my.length ? `<div class="mlist">${my.map(modelRow).join('')}</div>` : `<p class="sec-empty">${local ? '还没有下载模型。从下面挑一个，下载后完全离线运行。' : !p.connected ? (rec ? `连接后，默认加上 ${rec} 个 vox 核对过的模型；更多模型在下面添加。` : '连接后，从下面添加想用的模型。') : '还没有添加模型。从下面添加。'}</p>`}
+    </section>
+    <section class="sec"><div class="sec-h"><h3>${local ? '可下载' : '可添加'}</h3><span class="n">${avail.length}</span><span class="sp"></span><span class="note">${note}</span>
+      ${d ? `<button class="btn sm" type="button" id="dFetch" ${canFetch && !busy ? '' : 'disabled'} ${canFetch ? '' : 'title="先连接（填 Key）"'}>${ic('refresh', 14, busy ? 'spin' : '')}${busy ? '查询中' : d.fetched ? '刷新' : '在线查询'}</button>` : ''}</div>
+      ${err ? `<div class="err">${esc(err)}</div>` : ''}
+      ${avail.length > 8 ? `<label class="search">${ic('search', 15)}<input class="in" id="mq" placeholder="筛选 ${avail.length} 个模型" value="${esc(S.mq[p.id] || '')}" aria-label="筛选模型"></label>` : ''}
+      ${shown.length ? `<div class="mlist">${shown.map(modelRow).join('')}</div>` : `<p class="sec-empty">${busy ? '正在查询…' : q ? '没有匹配的模型。' : avail.length ? '' : '都已在我的模型里。'}</p>`}
+      ${local ? '' : `<form class="manual" id="dAdd"><span>列表里没有？</span><input class="in mono" placeholder="手动填 ${esc(p.name)} 的模型 ID" aria-label="模型 ID" spellcheck="false" autocomplete="off" ${p.connected ? '' : 'disabled'}>
+        <button class="btn sm" type="submit" ${p.connected ? '' : 'disabled title="先连接（填 Key）"'}>${ic('plus', 14)}添加</button></form>`}
+    </section>`;
+  bindProvider(el, p);
+  if (d && d.public && !d.fetched && !st) fetchModels(el, p);   // 公开列表：第一次打开时自动查
+}
+function connHtml(p) {
+  const env = p.credentials[0]?.env;
+  return `<section class="sec conn"><div class="sec-h"><h3>连接</h3>${p.connected ? `<span class="pill loaded">${ic('check', 12)}已连接</span>` : '<span class="pill needs_key">未连接</span>'}<span class="sp"></span>
+      <a class="lnk" href="${esc(p.console)}" target="_blank" rel="noopener">申请 Key${ic('ext', 13)}</a></div>
+    ${p.credentials.map(c => keyField(p, c, false)).join('')}
+    ${p.optional.length ? `<details class="adv"><summary>可选设置</summary>${p.optional.map(c => keyField(p, c, true)).join('')}</details>` : ''}
+    <details class="adv"><summary>Key 存在哪里？</summary><div class="keynote">两种方式都行，<b>环境变量优先</b>：
+      <ul><li><b>在这里填</b>：保存到本机 <code>~/.config/vox/credentials.json</code>（权限 600），立即生效。</li>
+      <li><b>环境变量</b>：如 <code>export ${esc(env)}=…</code>，适合终端、脚本、Agent 和 CI，会覆盖这里保存的值。</li></ul>
+      Key 不会通过 API 返回，也不写进日志，页面只显示末 4 位。命令行：<code>vox keys set ${esc(env)}</code></div></details>
+  </section>`;
 }
 function keyField(p, c, opt) {
+  const editing = S.keyEdit === c.env || !c.configured;
   return `<div class="kf">
     <div class="lbl"><span>${esc(c.label)}</span><span class="key">${esc(c.env)}</span></div>
-    ${c.configured ? `<div class="kset"><span class="pill loaded">已配置</span><span class="count">来自${c.source === 'env' ? '环境变量' : '配置文件'}${c.last4 ? ' · …' + esc(c.last4) : ''}</span>${c.source === 'file' ? `<button class="btn ghost sm" type="button" data-delkey="${esc(c.env)}">删除</button>` : ''}</div>` : ''}
-    ${c.source === 'env' ? '' : `<form data-env="${esc(c.env)}" class="kform"><input class="in mono" type="password" autocomplete="off" spellcheck="false" placeholder="${c.configured ? '粘贴新值以替换' : opt ? '可选' : '粘贴 Key'}" aria-label="${esc(c.env)}"><button class="btn ${opt || c.configured ? '' : 'primary'}" type="submit">保存</button></form>`}</div>`;
+    ${c.configured && !editing ? `<div class="kset"><code class="mono">••••${esc(c.last4 || '')}</code><span class="note">来自${c.source === 'env' ? '环境变量，在终端里修改' : '配置文件'}</span><span class="sp"></span>
+      ${c.source === 'file' ? `<button class="btn ghost sm" type="button" data-keyedit="${esc(c.env)}">更换</button><button class="btn ghost sm danger" type="button" data-delkey="${esc(c.env)}">删除</button>` : ''}</div>` : ''}
+    ${editing && c.source !== 'env' ? `<form data-env="${esc(c.env)}" class="kform"><input class="in mono" type="password" autocomplete="off" spellcheck="false" placeholder="${c.configured ? '粘贴新的值' : opt ? '可选' : '粘贴 Key'}" aria-label="${esc(c.env)}">
+      <button class="btn ${opt ? '' : 'primary'}" type="submit">${opt ? '保存' : c.configured ? '保存' : '连接'}</button>${c.configured ? '<button class="btn ghost" type="button" data-keycancel>取消</button>' : ''}</form>` : ''}</div>`;
+}
+function statusPill(m) {
+  return m.status === 'loaded' ? '<span class="pill loaded">已加载</span>' : m.status === 'downloading' ? '<span class="pill downloading">下载中</span>' : '';
+}
+function modelRow(m) {
+  const cloud = m.provider !== 'local';
+  const params = m.params_b ? (m.params_b >= 1 ? `${m.params_b}B` : `${Math.round(m.params_b * 1000)}M`) : '';
+  const facts = cloud ? [priceText(m) || (m.inferred ? '价格见官网' : ''), m.voice_count ? `${m.voice_count} 个音色` : '']
+    : [[params, m.quant].filter(Boolean).join(' · '), m.size_gb ? `${m.size_gb} GB` : '', m.voice_count ? `${m.voice_count} 个音色` : '', m.downloads ? `${fmtN(m.downloads)} 次下载` : ''];
+  const caps = [['instructions', m.instr_enum ? '情绪枚举' : '情绪指令'], ['design', '声音设计'], ['seed', '可复现']].filter(([k]) => m.caps[k]).map(([, t]) => t);
+  const tags = [m.inferred ? '<span class="tag" title="vox 注册表里没有这个模型：请求格式与能力按同一家已核对的模型推断">能力推断</span>' : '', m.source === 'custom' && cloud ? '<span class="tag">手动添加</span>' : ''].join('');
+  return `<div class="mrow ${m.mine ? 'is-mine' : ''}" style="--m:${hue(m.id)}">
+    <div class="mr-main">
+      <div class="mr-t"><b>${esc(m.name)}</b>${statusPill(m)}${tags}</div>
+      <div class="mr-s"><button class="idc" type="button" data-copyid="${esc(m.id)}" title="复制模型 ID">${esc(m.id)}${ic('copy', 12)}</button>${facts.filter(Boolean).map(f => `<span>${f}</span>`).join('')}</div>
+      ${m.about ? `<p class="mr-d">${esc(m.about)}</p>` : ''}
+      ${caps.length ? `<div class="mr-c">${caps.map(t => `<span>${ic('check', 12)}${t}</span>`).join('')}</div>` : ''}
+    </div>
+    <div class="mr-a">${rowActions(m)}</div></div>`;
+}
+function rowActions(m) {
+  const cloud = m.provider !== 'local', id = esc(m.id), p = PV(m.provider);
+  if (m.status === 'downloading') return `<div class="dl"><span class="note" data-prog="${id}">下载中…</span><div class="bar"><i data-bar="${id}"></i></div></div>`;
+  if (m.mine) {
+    const tryBtn = `<a class="btn primary sm" href="#/playground" data-trym="${id}">试音</a>`;
+    if (cloud) return `${tryBtn}<button class="btn ghost sm" type="button" data-rm="${id}">移除</button>`;
+    return `${tryBtn}${m.status === 'loaded' ? `<button class="btn sm" type="button" data-unload="${id}">卸载</button>` : `<button class="btn sm" type="button" data-load="${id}" title="提前载入内存，第一次生成不用等">预加载</button>`}
+      <button class="btn ghost sm danger" type="button" data-rm="${id}" data-size="${m.size_gb || ''}">删除</button>`;
+  }
+  if (!cloud) return m.engine === 'kokoro' ? '<span class="note">首次合成时自动下载</span>' : `<button class="btn sm" type="button" data-add="${id}">${ic('download', 14)}下载${m.size_gb ? ` ${m.size_gb} GB` : ''}</button>`;
+  return `<button class="btn sm" type="button" data-add="${id}" ${p?.connected ? '' : 'disabled title="先连接（填 Key）"'}>${ic('plus', 14)}添加</button>`;
 }
 async function afterModels() { await Promise.all([refreshModels(), api('/api/providers').then(p => S.providers = p)]); await refreshVoices(); }
-function bindProvider(el, p) {
-  const again = () => pageModels($('#main'));
-  $$('[data-copy]', el).forEach(b => b.onclick = () => copy(b.dataset.copy, '已复制命令'));
-  $$('form[data-env]', el).forEach(f => f.onsubmit = async e => {
-    e.preventDefault(); const inp = $('input', f), v = inp.value.trim(); if (!v) return toast('先粘贴 Key');
-    try { await api('/api/keys', { env: f.dataset.env, value: v }); inp.value = ''; toast(`已保存 ${f.dataset.env}`); await afterModels(); again(); }
-    catch (err) { toast(err.message, 5000); }
-  });
-  $$('[data-delkey]', el).forEach(b => b.onclick = async () => { await api('/api/keys/delete', { env: b.dataset.delkey }); toast('已从配置文件删除'); await afterModels(); again(); });
-  const f = $('#dFetch', el); if (f) f.onclick = async () => {
-    S.disc = { pid: p.id, loading: true }; renderProvider(el);
-    try { S.disc = { pid: p.id, items: await api('/api/providers/discover', { provider: p.id }) }; } catch (e) { S.disc = { pid: p.id, error: e.message }; }
-    renderProvider(el);
-  };
-  $('[data-dclose]', el)?.addEventListener('click', () => { S.disc = null; renderProvider(el); });
-  const add = async (remote, name) => {
-    try { const r = await api('/api/models/add', { provider: p.id, remote, name: name || undefined }); toast(`已添加 ${r.model}`); }
-    catch (e) { return toast(e.message, 5000); }
-    if (S.disc?.pid === p.id && S.disc.items) S.disc.items.forEach(x => { if (x.remote === remote) x.added = true; });
-    await afterModels(); again();
-  };
-  $$('[data-dadd]', el).forEach(b => b.onclick = () => { b.disabled = true; add(b.dataset.dadd, b.dataset.dname); });
-  const t = $('#dAddT', el); if (t) t.onclick = () => { S.addOpen = S.addOpen === p.id ? null : p.id; renderProvider(el); if (S.addOpen) $('#dAdd input', el).focus(); };
-  const af = $('#dAdd', el); if (af) af.onsubmit = e => { e.preventDefault(); const v = $('input', af).value.trim(); if (v) { S.addOpen = null; add(v); } };
-  $$('[data-en]', el).forEach(i => i.onchange = async () => {
-    try { await api('/api/models/enable', { model: i.dataset.en, enabled: i.checked }); } catch (e) { i.checked = !i.checked; return toast(e.message, 5000); }
-    await afterModels(); again();
-  });
-  $$('[data-rm]', el).forEach(b => b.onclick = async () => { await api('/api/models/remove', { model: b.dataset.rm }).catch(e => toast(e.message, 5000)); toast('已从清单删除'); await afterModels(); again(); });
-  $$('[data-pull]', el).forEach(b => b.onclick = async () => { await api('/api/models/pull', { model: b.dataset.pull }); await refreshModels(); again(); });
-  $$('[data-load]', el).forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = '加载中…'; try { const r = await api('/api/models/load', { model: b.dataset.load }); toast(`已加载，用时 ${r.seconds}s`); } catch (e) { toast(e.message, 5000); } await refreshModels(); refreshStatus(); again(); });
-  $$('[data-unload]', el).forEach(b => b.onclick = async () => { await api('/api/models/unload', { model: b.dataset.unload }); await refreshModels(); refreshStatus(); again(); });
+const rerender = () => { if (S.route === 'models') pageModels($('#main')); };
+function bindRows(el) {
+  $$('[data-copyid]', el).forEach(b => b.onclick = () => copy(b.dataset.copyid, `已复制 ${b.dataset.copyid}`));
   $$('[data-trym]', el).forEach(a => a.onclick = () => { ensureSlots(); Object.assign(slot(), newSlot({ model: a.dataset.trym })); saveSlots(); });
-  $$('[data-keyfocus]', el).forEach(a => a.onclick = e => { e.preventDefault(); const i = $('.kform input', el); i?.scrollIntoView({ block: 'center' }); i?.focus(); });
+  $$('[data-add]', el).forEach(b => b.onclick = async () => {
+    b.disabled = true; const m = M(b.dataset.add);
+    try { await api('/api/models/add', { model: b.dataset.add }); toast(m.provider === 'local' ? `开始下载 ${m.name}` : `已加进我的模型：${m.name}`); }
+    catch (e) { b.disabled = false; return toast(e.message, 5000); }
+    await afterModels(); rerender();
+  });
+  $$('[data-rm]', el).forEach(b => b.onclick = async () => {
+    const m = M(b.dataset.rm), local = m.provider === 'local';
+    if (local && !b.classList.contains('armed')) {   // 删除文件：原地二次确认
+      b.classList.add('armed'); b.textContent = `确认删除${b.dataset.size ? ` ${b.dataset.size} GB` : ''}`;
+      clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('armed'); b.textContent = '删除'; }, 4000); return;
+    }
+    try { await api('/api/models/remove', { model: m.id, delete_files: local }); toast(local ? `已删除 ${m.name} 的模型文件` : `已移出我的模型：${m.name}`); }
+    catch (e) { return toast(e.message, 5000); }
+    await afterModels(); refreshStatus(); rerender();
+  });
+  $$('[data-load]', el).forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = '加载中…'; try { const r = await api('/api/models/load', { model: b.dataset.load }); toast(`已加载，用时 ${r.seconds}s`); } catch (e) { toast(e.message, 5000); } await refreshModels(); refreshStatus(); rerender(); });
+  $$('[data-unload]', el).forEach(b => b.onclick = async () => { await api('/api/models/unload', { model: b.dataset.unload }); await refreshModels(); refreshStatus(); rerender(); });
+}
+async function fetchModels(el, p) {
+  S.disc[p.id] = 'loading'; if (el.isConnected) renderProvider(el);
+  try { const r = await api('/api/providers/discover', { provider: p.id }); S.disc[p.id] = null; await afterModels(); toast(`从 ${p.kind === 'local' ? 'HuggingFace' : p.name} 查到 ${r.found} 个模型`); }
+  catch (e) { S.disc[p.id] = e.message; }
+  if (S.route === 'models' && S.sub === p.id) rerender();
+}
+function bindProvider(el, p) {
+  bindRows(el);
+  $$('form[data-env]', el).forEach(f => f.onsubmit = async e => {
+    e.preventDefault(); const inp = $('input', f), v = inp.value.trim(); if (!v) return inp.focus();
+    const was = p.connected;
+    try { await api('/api/keys', { env: f.dataset.env, value: v }); inp.value = ''; S.keyEdit = null; }
+    catch (err) { return toast(err.message, 5000); }
+    await afterModels();
+    const np = PV(p.id); toast(!was && np.connected ? `已连接 ${p.name}${np.mine ? `，默认加上了 ${np.mine} 个模型` : ''}` : `已保存 ${f.dataset.env}`);
+    rerender();
+  });
+  $$('[data-keyedit]', el).forEach(b => b.onclick = () => { S.keyEdit = b.dataset.keyedit; renderProvider(el); $('form[data-env] input', el)?.focus(); });
+  $$('[data-keycancel]', el).forEach(b => b.onclick = () => { S.keyEdit = null; renderProvider(el); });
+  $$('[data-delkey]', el).forEach(b => b.onclick = async () => {
+    if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = '确认删除'; setTimeout(() => { b.classList.remove('armed'); b.textContent = '删除'; }, 4000); return; }
+    await api('/api/keys/delete', { env: b.dataset.delkey }); toast('已从配置文件删除'); await afterModels(); rerender();
+  });
+  const f = $('#dFetch', el); if (f) f.onclick = () => fetchModels(el, p);
+  const mq = $('#mq', el); if (mq) mq.oninput = () => { S.mq[p.id] = mq.value; const pos = mq.selectionStart; renderProvider(el); const n = $('#mq', el); n.focus(); n.setSelectionRange(pos, pos); };
+  const af = $('#dAdd', el); if (af) af.onsubmit = async e => {
+    e.preventDefault(); const v = $('input', af).value.trim(); if (!v) return;
+    try { const r = await api('/api/models/add', { provider: p.id, remote: v }); toast(`已添加 ${r.model}`); } catch (err) { return toast(err.message, 5000); }
+    await afterModels(); rerender();
+  };
 }
 function estimateLocal(r) { // 与服务端 hub.estimate 同一口径，只给按字符 / 字节计费的模型估算
   const m = M(r.model), p = m?.price; if (!p || m.provider === 'local' || p.amount == null) return null;
@@ -573,26 +670,6 @@ function priceText(m) {
   const sym = p.currency === 'CNY' ? '¥' : '$', per = { 1000: '千', 10000: '万', 1000000: '百万' }[p.per] || p.per;
   return `${sym}${p.amount} / ${per}${{ char: '字符', byte: 'UTF-8 字节', cjk2: '字符（汉字按 2）' }[p.unit] || ''}`;
 }
-function modelCard(m) {
-  const c = m.caps, cloud = m.provider !== 'local';
-  const facts = cloud ? [priceText(m) || (m.custom ? '价格见 Provider 官网' : null), m.voice_count ? `${m.voice_count} 个音色` : null, `<code>${esc(m.remote || '')}</code>`].filter(Boolean) :
-    [`<b>${m.params_b >= 1 ? m.params_b + 'B' : Math.round(m.params_b * 1000) + 'M'}</b> 参数`, esc(m.quant), `${m.size_gb} GB`, esc(m.license), m.voice_count ? `${m.voice_count} 个音色` : null].filter(Boolean);
-  const cmd = !m.enabled ? `vox models on ${m.id}` : cloud ? (m.status === 'needs_key' ? `vox keys set ${m.key_env}` : `vox say "你好" -m ${m.id}`) : m.status === 'not_downloaded' ? `vox pull ${m.alias}` : m.status === 'loaded' ? `vox unload ${m.alias}` : `vox load ${m.alias}`;
-  const rm = m.custom ? `<button class="btn ghost sm" type="button" data-rm="${esc(m.id)}">删除</button>` : '';
-  const acts = !m.enabled ? rm :
-    m.status === 'needs_key' ? `<a class="btn" href="#" data-keyfocus>先填 Key</a>${rm}` :
-    m.status === 'not_downloaded' ? (m.alias === 'kokoro' ? '<span class="count">首次合成时自动下载</span>' : `<button class="btn primary" type="button" data-pull="${m.id}">下载 ${m.size_gb} GB</button>`) :
-    m.status === 'downloading' ? `<span class="count" data-prog="${m.id}">下载中…</span><div class="bar"><i data-bar="${m.id}"></i></div>` :
-    `<div style="display:flex;gap:6px"><a class="btn primary" href="#/playground" data-trym="${m.id}">去试音</a>${m.status === 'loaded' ? `<button class="btn" type="button" data-unload="${m.id}">卸载</button>` : cloud ? rm : `<button class="btn" type="button" data-load="${m.id}">预加载</button>`}</div>`;
-  return `<article class="mc ${cloud ? 'cloud' : ''} ${m.enabled ? '' : 'off'}" style="--m:${hue(m.id)}">
-    <div><h3><label class="sw" title="${m.enabled ? '已启用：出现在音色库和试音台' : '已停用：不出现在音色库和试音台'}"><input type="checkbox" data-en="${esc(m.id)}" ${m.enabled ? 'checked' : ''} aria-label="启用 ${esc(m.name)}"><i></i></label>
-      ${esc(m.name)} <span class="pill ${m.status}">${!m.enabled ? '已停用' : cloud && m.status === 'ready' ? '可用' : STATUS[m.status]}</span>${m.custom ? '<span class="tag">自行添加</span>' : ''} <code>${esc(m.id)}</code></h3>
-      <p>${esc(m.about)}</p>
-      <div class="facts">${facts.map(f => `<span>${f}</span>`).join('')}</div>
-      <div class="cap" style="margin-top:8px">${[['voices', '预置音色'], ['instructions', m.instr_enum ? '情绪枚举' : '情绪指令'], ['design', '声音设计'], ['seed', '可复现'], ['native_speed', '原生语速']].map(([k, t]) => `<span class="${c[k] ? 'y' : 'n'}">${t}</span>`).join('')}</div>
-      ${m.languages?.length || m.homepage ? `<div class="facts">${m.languages?.length ? `<span>语言：${esc(m.languages.join('、'))}</span>` : ''}${m.homepage ? `<a href="${esc(m.homepage)}" target="_blank" rel="noopener">模型主页 ↗</a>` : ''}</div>` : ''}</div>
-    <div class="mc-acts">${acts}<button class="cli" type="button" data-copy="${esc(cmd)}">${esc(cmd)}</button></div></article>`;
-}
 function pollPull(main) {
   clearTimeout(S._poll);
   S._poll = setTimeout(async () => {
@@ -601,8 +678,8 @@ function pollPull(main) {
       const st = await api('/api/models/pull?model=' + encodeURIComponent(id)).catch(() => null); if (!st) continue;
       const pct = st.total ? Math.min(100, st.done / st.total * 100) : 0;
       const bar = $(`[data-bar="${CSS.escape(id)}"]`), lab = $(`[data-prog="${CSS.escape(id)}"]`);
-      if (bar) bar.style.transform = `scaleX(${pct / 100})`; if (lab) lab.textContent = `下载中 ${(st.done / 1e9).toFixed(2)} / ${(st.total / 1e9).toFixed(2)} GB`;
-      if (st.state === 'done' || st.state === 'error') { if (st.state === 'error') toast(`下载失败：${st.error}`, 6000); else toast('下载完成，已校验'); await refreshModels(); await refreshVoices(); return pageModels(main); }
+      if (bar) bar.style.transform = `scaleX(${pct / 100})`; if (lab) lab.textContent = `${(st.done / 1e9).toFixed(2)} / ${(st.total / 1e9).toFixed(2)} GB`;
+      if (st.state === 'done' || st.state === 'error') { toast(st.state === 'error' ? `下载失败：${st.error}` : '下载完成，已校验', st.state === 'error' ? 6000 : 2400); await afterModels(); return pageModels(main); }
     }
     pollPull(main);
   }, 1500);
@@ -610,32 +687,34 @@ function pollPull(main) {
 
 /* ============ API ============ */
 function pageApi(main) {
-  const ready = S.models.filter(usable), m = M(S.apiModel) && usable(M(S.apiModel)) ? M(S.apiModel) : ready[0] || S.models[0];
+  const ready = mine().filter(usable), m = M(S.apiModel) && usable(M(S.apiModel)) ? M(S.apiModel) : ready[0] || S.models[0];
   const vs = S.voices.filter(v => v.model === m.id && v.kind === 'preset');
   const r = { model: m.id, input: '你好，这是来自 vox 的声音。', ...(m.caps.voices ? { voice: vs[0]?.voice || m.default_voice } : {}), ...(m.caps.design ? { instructions: S.cat.design[1] } : {}) };
   const js = `const res = await fetch("${ORIGIN}/v1/audio/speech", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify(${JSON.stringify({ ...r, response_format: 'mp3' })}),\n});\nconst audio = new Audio(URL.createObjectURL(await res.blob()));\naudio.play();`;
   const code = { curl: cmdOf(r, 'curl'), python: cmdOf(r, 'python'), js, cli: cmdOf(r, 'cli') };
   const tabs = { curl: 'cURL', python: 'Python', js: 'JavaScript', cli: 'CLI' };
-  const eps = [['POST', '/v1/audio/speech', 'OpenAI 兼容：返回音频。扩展参数 seed、lang、temperature…；响应头 X-Vox-Seed'], ['GET', '/v1/models', 'OpenAI 兼容：模型列表'],
-    ['GET', '/api/models', '模型、能力与状态'], ['POST', '/api/models/pull · load · unload', '下载 / 预加载 / 卸载'], ['GET', '/api/voices', '音色库，可按 model、lang、gender、q 筛选'],
-    ['POST', '/api/voices/sample', '生成或取音色样本'], ['POST', '/api/speech', '合成并返回 JSON（含实际种子、时长、音频地址）'], ['GET', '/api/history', '历史，与 CLI 共享'],
-    ['POST', '/api/asr', '读音校对'], ['GET', '/llms.txt', '给 Agent 的接口说明']];
+  const eps = [
+    ['合成', [['POST', '/v1/audio/speech', 'OpenAI 兼容，返回音频。扩展参数 seed、lang、temperature 等；响应头带 X-Vox-Seed'], ['POST', '/api/speech', '合成并返回 JSON：实际种子、时长、音频地址'], ['GET', '/api/history', '合成历史，与 CLI 共享']]],
+    ['模型', [['GET', '/v1/models', 'OpenAI 兼容：我的模型'], ['GET', '/api/models', '全部模型与状态；?mine=1 只看我的，?provider= 只看一家'], ['POST', '/api/models/add · remove', '加进 / 移出我的模型（本地 = 下载 / 删除文件）'],
+      ['POST', '/api/providers/discover', '在线查询一家现在提供的模型'], ['POST', '/api/models/load · unload', '预加载 / 卸载本地模型']]],
+    ['音色', [['GET', '/api/voices', '音色库，可按 model、lang、gender、q 筛选'], ['POST', '/api/voices/sample', '生成或取音色样本'], ['POST', '/api/asr', '读音校对']]],
+    ['给 Agent', [['GET', '/llms.txt', '接口说明与我的模型清单']]]];
   main.innerHTML = `
-    <div class="head"><div><h1>API</h1><p>OpenAI 兼容。任何支持 OpenAI 语音接口的客户端，把 base URL 换成下面这个，就能用本地模型。</p></div></div>
-    <div class="card"><div class="lbl" style="margin-bottom:8px"><span>Base URL</span><span class="key">api_key 任意填写，本地服务不校验</span></div>
-      <div class="base"><code class="mono">${ORIGIN}/v1</code><button class="btn sm" type="button" data-copy="${ORIGIN}/v1">复制</button><a class="btn ghost sm" href="/llms.txt" target="_blank">给 Agent 的说明 llms.txt ↗</a></div></div>
-    <div class="twocol">
-      <div class="card code-card"><div class="equiv-head"><div class="seg">${Object.entries(tabs).map(([k, t]) => `<button type="button" data-at="${k}" class="${S.apiTab === k ? 'on' : ''}">${t}</button>`).join('')}</div><span class="sp"></span>
-        <select class="in" id="apiModel" style="width:auto">${ready.map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.id)}</option>`).join('')}</select>
-        <button class="btn ghost sm" type="button" id="apiCopy">复制</button></div><pre>${esc(code[S.apiTab])}</pre></div>
-      <div class="card"><div class="lbl" style="margin-bottom:6px"><span>接口</span></div><table class="ep">${eps.map(e => `<tr><td>${e[0]}</td><td>${esc(e[1])}</td><td>${esc(e[2])}</td></tr>`).join('')}</table></div>
-    </div>
-    <div class="card" style="margin-top:16px"><div class="lbl" style="margin-bottom:6px"><span>统一的参数名</span></div>
-      <table class="ep"><tr><td>CLI</td><td>-m · -v · -i · -s · --seed</td><td rowspan="3" style="color:var(--text-2)">三个入口用同一套名字：模型 <code>model</code>、音色 <code>voice</code>（也可写引用如 <code>qwen3:serena</code>、<code>my:&lt;id&gt;</code>）、情绪 / 声音描述 <code>instructions</code>、语速 <code>speed</code>、种子 <code>seed</code>。</td></tr>
-      <tr><td>HTTP</td><td>model · voice · instructions · speed · seed</td></tr><tr><td>WebUI</td><td>模型 · 音色 · 情绪 · 语速 · 种子</td></tr></table></div>`;
+    <div class="head"><div><h1>API</h1><p>OpenAI 兼容：把客户端的 base URL 换成下面这个，就能调用我的全部模型。</p></div></div>
+    <div class="card base-card"><div class="lbl"><span>Base URL</span><span class="key">api_key 随便填，本地服务不校验</span></div>
+      <div class="base"><code class="mono">${ORIGIN}/v1</code><button class="btn sm" type="button" data-copy="${ORIGIN}/v1">${ic('copy', 14)}复制</button><a class="lnk" href="/llms.txt" target="_blank">给 Agent 的说明 llms.txt${ic('ext', 13)}</a></div></div>
+    <div class="card code-card"><div class="equiv-head"><div class="seg">${Object.entries(tabs).map(([k, t]) => `<button type="button" data-at="${k}" class="${S.apiTab === k ? 'on' : ''}">${t}</button>`).join('')}</div><span class="sp"></span>
+      <select class="in sel" id="apiModel" aria-label="示例用的模型">${ready.map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.id)}</option>`).join('')}</select>
+      <button class="btn ghost sm" type="button" id="apiCopy">${ic('copy', 14)}复制</button></div><pre>${esc(code[S.apiTab])}</pre></div>
+    <div class="card"><table class="ep">${eps.map(([g, rows]) => `<tbody><tr class="ep-g"><th colspan="3">${g}</th></tr>${rows.map(e => `<tr><td class="ep-m">${e[0]}</td><td class="ep-p">${esc(e[1])}</td><td>${esc(e[2])}</td></tr>`).join('')}</tbody>`).join('')}</table></div>
+    <div class="card"><div class="lbl"><span>统一的参数名</span></div>
+      <table class="ep names"><thead><tr><th></th><th>模型</th><th>音色</th><th>情绪 / 声音描述</th><th>语速</th><th>种子</th></tr></thead>
+        <tbody><tr><td class="ep-m">HTTP</td><td><code>model</code></td><td><code>voice</code></td><td><code>instructions</code></td><td><code>speed</code></td><td><code>seed</code></td></tr>
+        <tr><td class="ep-m">CLI</td><td><code>-m</code></td><td><code>-v</code></td><td><code>-i</code></td><td><code>-s</code></td><td><code>--seed</code></td></tr></tbody></table>
+      <p class="note">音色也可以写引用：<code>qwen3:serena</code>、<code>my:&lt;id&gt;</code>，引用里已经带上了模型。</p></div>`;
   $$('[data-copy]', main).forEach(b => b.onclick = () => copy(b.dataset.copy));
   $$('[data-at]', main).forEach(b => b.onclick = () => { S.apiTab = b.dataset.at; pageApi(main); });
-  $('#apiModel', main).onchange = e => { S.apiModel = e.target.value; pageApi(main); };
+  const am = $('#apiModel', main); if (am) am.onchange = e => { S.apiModel = e.target.value; pageApi(main); };
   $('#apiCopy', main).onclick = () => copy(code[S.apiTab], '已复制示例代码');
 }
 

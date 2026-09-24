@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -46,6 +47,11 @@ KEYS = {"OPENAI_API_KEY": "sk-openai-test", "INWORLD_API_KEY": "aW53b3JsZDp0ZXN0
         "VOLC_TTS_API_KEY": "volc-test", "MINIMAX_API_KEY": "mm-test"}
 for k, v in KEYS.items():
     credentials.set(k, v)
+
+
+# 音色列表平时在后台联网更新；测试里一律关掉，保持离线（VoiceCacheTest 单独验证这套逻辑）
+_REAL_PULL = base.CloudEngine._pull_voices
+base.CloudEngine._pull_voices = lambda self, f, raise_errors=False: base._PULLING.discard(self.m["id"])
 
 
 class patch_env:
@@ -346,7 +352,7 @@ class ModelListTest(unittest.TestCase):
         hub.add_model("minimax/speech-2.8-hd")
         r = hub.add_model("minimax/speech-2.9-hd")                           # 列表接口查不到的，手动填模型 ID
         m = catalog.find_model(r["model"])
-        self.assertEqual((m["source"], m["adapter"], m["remote"]), ("custom", "minimax", "speech-2.9-hd"))
+        self.assertEqual((m["source"], m["adapter"], m["remote"], m["name"]), ("custom", "minimax", "speech-2.9-hd", "speech-2.9-hd"))
         calls, _ = run(minimax, "minimax/speech-2.9-hd", Fake({"data": {"audio": MP3.hex()}, "base_resp": {"status_code": 0}}), input="你好")
         self.assertEqual(calls[0]["body"]["model"], "speech-2.9-hd")      # 借用同家的请求格式，只换模型名
         hub.remove_model("minimax/speech-2.9-hd")
@@ -396,6 +402,52 @@ class ModelListTest(unittest.TestCase):
         catalog.UPDATED.unlink()
         catalog.rebuild()
         self.assertIsNone(catalog.find_model("openai/gpt-9-tts"))
+
+
+class VoiceCacheTest(unittest.TestCase):
+    """音色列表：先给手头有的，后台更新；失败 10 分钟内不重试；换 Key 清掉失败记录。"""
+
+    def test_stale_while_revalidate(self):
+        m = catalog.find_model("stepfun/stepaudio-3-tts")
+        e = engine_for(m)
+        f = base.CACHE / "stepfun__stepaudio-3-tts.json"
+        f.unlink(missing_ok=True)
+        f.with_suffix(".fail").unlink(missing_ok=True)
+        calls = []
+        e.fetch_voices = lambda: calls.append(1) or [{"voice": "online-1", "name": "在线音色"}]
+        base.CloudEngine._pull_voices = _REAL_PULL
+        try:
+            first = e.voices()                                    # 立即返回静态音色，不等网络
+            self.assertEqual(first[0]["voice"], m["voices"][0]["voice"])
+            for _ in range(50):
+                if f.exists():
+                    break
+                time.sleep(0.02)
+            self.assertEqual(e.voices()[0]["voice"], "online-1")   # 后台拉到后，下次用在线列表
+            self.assertEqual(len(calls), 1)
+            f.unlink()
+
+            def boom():
+                raise base.ProviderError("HTTP 401：bad key")
+            e.fetch_voices = boom
+            e.voices()
+            for _ in range(50):
+                if f.with_suffix(".fail").exists():
+                    break
+                time.sleep(0.02)
+            self.assertTrue(f.with_suffix(".fail").exists())      # 失败记一笔
+            e.fetch_voices = lambda: calls.append(1) or []
+            e.voices()
+            time.sleep(0.1)
+            self.assertEqual(len(calls), 1)                       # 10 分钟内不重试
+            with self.assertRaises(base.ProviderError):
+                e.fetch_voices = boom
+                e.voices(refresh=True)                            # 显式刷新如实报错
+            hub.set_key("STEPFUN_API_KEY", "step-test")
+            self.assertFalse(f.with_suffix(".fail").exists())     # 换 Key 清掉失败记录
+        finally:
+            base.CloudEngine._pull_voices = lambda self, f, raise_errors=False: base._PULLING.discard(self.m["id"])
+            del e.fetch_voices
 
 
 class GatewayTest(unittest.TestCase):

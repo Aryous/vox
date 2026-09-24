@@ -150,7 +150,7 @@ def models(provider: str | None = None, mine: bool | None = None) -> list[dict]:
             continue
         st = model_status(m)
         local = m["provider"] == "local"
-        d = {k: v for k, v in m.items() if k not in ("engine", "voices", "compat")}
+        d = {k: v for k, v in m.items() if k not in ("voices", "compat")}
         d.update(status=st, saved=local and st != "not_downloaded" or m["id"] in saved[m["provider"]],
                  provider_name=catalog.PROVIDERS[m["provider"]]["name"])
         d["mine"] = st in ("ready", "loaded", "downloading") if local else st == "ready" and d["saved"]
@@ -625,6 +625,14 @@ def provider_list() -> list[dict]:
     return out
 
 
+def _forget_voice_failures(env: str):
+    """换了 Key 就清掉之前拉音色失败的记录，让新 Key 立刻生效。"""
+    for pid, p in catalog.PROVIDERS.items():
+        if any(c["env"] == env for c in p.get("credentials", []) + p.get("optional", [])):
+            for f in providers.base.CACHE.glob(f"{pid}__*.fail"):
+                f.unlink(missing_ok=True)
+
+
 def _known_env(env: str) -> bool:
     return any(c["env"] == env for p in catalog.PROVIDERS.values() for c in p.get("credentials", []) + p.get("optional", []))
 
@@ -635,6 +643,7 @@ def set_key(env: str, value: str) -> dict:
     if not value.strip():
         raise VoxError("值不能为空")
     credentials.set(env, value)
+    _forget_voice_failures(env)
     return credentials.status(env)
 
 
