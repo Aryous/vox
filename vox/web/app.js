@@ -26,6 +26,13 @@ async function api(path, body) {
   if (!r.ok || j.error) throw new Error(typeof j.error === 'string' ? j.error : j.error?.message || `HTTP ${r.status}`);
   return j;
 }
+/* 文本输入：中文输入法组字期间（拼音还没上屏）不触发，确认上屏后再处理；否则重绘会打断组字，把拼音当英文留下 */
+function onText(inp, fn, delay = 0) {
+  if (!inp || inp._onText) return; inp._onText = true;
+  let t; const run = () => { clearTimeout(t); t = setTimeout(fn, delay); };
+  inp.addEventListener('input', e => { if (!e.isComposing) run(); });
+  inp.addEventListener('compositionend', run);
+}
 function toast(msg, ms = 2400) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), ms); }
 async function copy(text, what = '已复制') { try { await navigator.clipboard.writeText(text); toast(what); } catch { toast('复制失败，请手动选择'); } }
 
@@ -206,7 +213,7 @@ function voiceCard(v) {
     </div></article>`;
 }
 function bindVoices(main, vs) {
-  $('#vq', main).oninput = e => { S.vf.q = e.target.value; store.set('vf', S.vf); clearTimeout(S._vq); S._vq = setTimeout(() => { S.vlimit = 60; pageVoices(main); $('#vq', main).focus(); const i = $('#vq', main); i.setSelectionRange(i.value.length, i.value.length); }, 180); };
+  const vq = $('#vq', main); onText(vq, () => { S.vf.q = vq.value; store.set('vf', S.vf); S.vlimit = 60; pageVoices(main); const i = $('#vq', main); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 180);
   $$('[data-fm]', main).forEach(b => b.onclick = () => { S.vf.model = b.dataset.fm; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); });
   $('#fprov', main).onchange = e => { S.vf.model = e.target.value || 'all'; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); };
   $$('[data-fg]', main).forEach(b => b.onclick = () => { S.vf.gender = b.dataset.fg; store.set('vf', S.vf); pageVoices(main); });
@@ -499,7 +506,7 @@ function pageCompare(main) {
     </section>
     <div id="pickbar"></div>`;
   const ta = $('#text', main);
-  ta.oninput = () => { S.text = ta.value; store.set('text', S.text); renderCands(main); };
+  onText(ta, () => { S.text = ta.value; store.set('text', S.text); refreshRows(main); }, 150);
   $$('[data-quick]', main).forEach(b => b.onclick = () => { ta.value = S.text = QUICK[+b.dataset.quick]; store.set('text', S.text); renderCands(main); });
   bindModeSeg(main);
   $('#reseed', main).onclick = () => { S.cmpSeed = Math.floor(Math.random() * 1e6); saveCands(); pageCompare(main); };
@@ -510,9 +517,25 @@ function pageCompare(main) {
 }
 function renderCands(main) {
   const list = $('#clist', main); if (!list) return;
-  $('#count', main).textContent = `${[...S.text].length} 字`;
   list.innerHTML = S.cands.map(candRow).join('');
   $$('canvas.wave', list).forEach(cv => drawWave(cv, cv.dataset.url));
+  renderCmpHead(main); bindCands(main); renderPickbar(main);
+}
+// 只重绘每行的摘要（音色、语气、结果），展开的编辑区原样保留：打字时不打断输入法、不丢光标
+function refreshRows(main) {
+  const list = $('#clist', main); if (!list) return;
+  $$('.cand', list).forEach((el, i) => {
+    const c = S.cands[i]; if (!c) return;
+    const tmp = document.createElement('div'); tmp.innerHTML = candRow(c, i);
+    const fresh = tmp.firstElementChild;
+    el.replaceChild(fresh.querySelector('.cr'), el.querySelector('.cr'));
+    el.className = fresh.className; el.style.cssText = fresh.style.cssText;
+    $$('canvas.wave', el).forEach(cv => drawWave(cv, cv.dataset.url));
+  });
+  renderCmpHead(main); bindCands(main); renderPickbar(main);
+}
+function renderCmpHead(main) {
+  $('#count', main).textContent = `${[...S.text].length} 字`;
   // 预估：只算还没生成、能生成的候选
   const todo = S.text.trim() ? S.cands.filter(c => usable(M(c.model)) && !candRes(c)?.rec && !candRes(c)?.busy) : [];
   const ests = todo.map(c => estimateNum(candReq(c))).filter(Boolean), sum = {};
@@ -520,8 +543,6 @@ function renderCands(main) {
   const tok = ests.filter(e => e.token).length, cost = Object.entries(sum).map(([cur, v]) => money(v, cur));
   $('#cmpEst', main).textContent = !S.text.trim() ? '先输入文本' : todo.length ? `${todo.length} 条未生成${cost.length ? ` · 云端约 ${cost.join(' + ')}` : todo.some(c => M(c.model).provider !== 'local') ? '' : ' · 都是本地模型，免费'}${tok ? ` · ${tok} 条按 token 计费` : ''}` : '都已生成';
   const g = $('#genAll', main); g.hidden = !todo.length; g.innerHTML = `生成 ${todo.length} 条`;
-  bindCands(main);
-  renderPickbar(main);
 }
 function candRow(c, i) {
   const m = M(c.model), r = candReq(c), res = S.cmpRes[rkey(r)], open = S.cmpOpen === c.id, ok = usable(m) && S.text.trim();
@@ -581,14 +602,19 @@ function bindCands(main) {
   $$('[data-ced]', list).forEach(ed => {
     const c = find(ed.dataset.ced);
     $$('[data-f]', ed).forEach(inp => {
-      const f = inp.dataset.f, apply = () => {
-        if (f === 'model') { Object.assign(c, newSlot({ model: inp.value, instructions: c.instructions, speed: c.speed }), { id: c.id, seedMode: c.seedMode === 'random' ? 'random' : 'shared' }); return redraw(); }
-        c[f] = f === 'speed' || f === 'seed' ? +inp.value : inp.value;
-        if (f === 'speed') $('.val', inp.closest('.field')).textContent = `${c.speed.toFixed(2)}×`;
-        saveCands(); clearTimeout(S._ced); S._ced = setTimeout(() => { const pos = inp.selectionStart; renderCands(main); const n = $(`[data-ced="${c.id}"] [data-f="${f}"]`, main); if (n && document.activeElement !== n && f === 'instructions') { n.focus(); n.setSelectionRange(pos, pos); } }, f === 'instructions' ? 500 : 0);
-      };
-      inp[inp.tagName === 'SELECT' ? 'onchange' : inp.type === 'range' ? 'onchange' : 'oninput'] = apply;
-      if (inp.type === 'range') inp.oninput = () => { $('.val', inp.closest('.field')).textContent = `${(+inp.value).toFixed(2)}×`; };
+      const f = inp.dataset.f;
+      if (f === 'model') return inp.onchange = () => { Object.assign(c, newSlot({ model: inp.value, instructions: c.instructions, speed: c.speed }), { id: c.id, seedMode: c.seedMode === 'random' ? 'random' : 'shared' }); redraw(); };
+      if (f === 'voice') return inp.onchange = () => { c.voice = inp.value; redraw(); };
+      if (inp.type === 'range') {
+        inp.oninput = () => { $('.val', inp.closest('.field')).textContent = `${(+inp.value).toFixed(2)}×`; };
+        return inp.onchange = () => { c.speed = +inp.value; saveCands(); refreshRows(main); };
+      }
+      // 文本（语气、固定种子）：只改状态和这一行的摘要，不重建正在输入的框
+      onText(inp, () => {
+        c[f] = f === 'seed' ? +inp.value : inp.value;
+        if (f === 'instructions') $$('[data-ex]', ed).forEach(b => b.classList.toggle('on', b.dataset.ex === c.instructions));
+        saveCands(); refreshRows(main);
+      }, 250);
     });
     $$('[data-ex]', ed).forEach(b => b.onclick = () => { c.instructions = c.instructions === b.dataset.ex ? '' : b.dataset.ex; redraw(); });
     $$('[data-sm]', ed).forEach(b => b.onclick = () => { c.seedMode = b.dataset.sm; redraw(); });
@@ -633,7 +659,7 @@ function renderPicker(main) {
       <button class="btn primary sm" type="button" id="vpAdd" disabled>添加</button><button class="btn ghost sm" type="button" id="vpClose">取消</button></div>
     <div class="vpick-l">${ms.map(mid => `<div class="vpick-g"><div class="vpick-gh">${M(mid).provider === 'local' ? `<i class="dot" style="--m:${hue(mid)}"></i>` : pIcon(M(mid).provider, 13)}${esc(M(mid).name)}</div>
       ${(() => { const all = vs.filter(v => v.model === mid); return all.slice(0, 60).map(v => `<label class="vpick-i ${have.has(`${v.model}|${v.voice}`) ? 'has' : ''}"><input type="checkbox" value="${esc(v.ref)}" ${have.has(`${v.model}|${v.voice}`) ? 'disabled checked' : ''}><span><b>${esc(v.name)}</b>${[v.gender && v.gender + '声', v.lang].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') + (all.length > 60 ? `<span class="note vpick-more">还有 ${all.length - 60} 个，搜索查看</span>` : ''); })()}</div>`).join('') || '<p class="sec-empty">没有匹配的音色。</p>'}</div></div>`;
-  const inp = $('#vpq', el); inp.oninput = () => { S.cmpQ = inp.value; const pos = inp.selectionStart; renderPicker(main); const n = $('#vpq', main); n.focus(); n.setSelectionRange(pos, pos); };
+  const inp = $('#vpq', el); onText(inp, () => { S.cmpQ = inp.value; const pos = inp.selectionStart; renderPicker(main); const n = $('#vpq', main); n.focus(); n.setSelectionRange(pos, pos); }, 150);
   const add = $('#vpAdd', el), boxes = $$('input[type=checkbox]:not([disabled])', el);
   boxes.forEach(b => b.onchange = () => { const n = boxes.filter(x => x.checked).length; add.disabled = !n; add.textContent = n ? `添加 ${n} 个` : '添加'; });
   $('#vpClose', el).onclick = () => { S.cmpPicker = false; renderPicker(main); };
@@ -848,7 +874,7 @@ function bindProvider(el, p) {
     await api('/api/keys/delete', { env: b.dataset.delkey }); toast('已从配置文件删除'); await afterModels(); rerender();
   });
   const f = $('#dFetch', el); if (f) f.onclick = () => fetchModels(el, p);
-  const mq = $('#mq', el); if (mq) mq.oninput = () => { S.mq[p.id] = mq.value; const pos = mq.selectionStart; renderProvider(el); const n = $('#mq', el); n.focus(); n.setSelectionRange(pos, pos); };
+  const mq = $('#mq', el); onText(mq, () => { S.mq[p.id] = mq.value; const pos = mq.selectionStart; renderProvider(el); const n = $('#mq', el); n.focus(); n.setSelectionRange(pos, pos); }, 150);
   const af = $('#dAdd', el); if (af) af.onsubmit = async e => {
     e.preventDefault(); const v = $('input', af).value.trim(); if (!v) return;
     try { const r = await api('/api/models/add', { provider: p.id, remote: v }); toast(`已添加 ${r.model}`); } catch (err) { return toast(err.message, 5000); }
