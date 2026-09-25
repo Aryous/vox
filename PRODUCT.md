@@ -30,7 +30,7 @@ vox 是 TTS 领域的 LM Studio / OpenRouter：
 ## Operating Context
 
 - `vox serve` 启动本地服务（默认 127.0.0.1:8765），同时承载 WebUI、原生 API（`/api/*`）和 OpenAI 兼容 API（`/v1/*`）。
-- CLI 与服务共用同一个核心库与数据目录（`~/.cache/vox`）：历史、收藏、样本、模型文件共享。
+- CLI 与服务共用同一个核心库与数据目录（`~/.vox`）：历史、收藏、样本、模型文件共享；可丢的缓存单独放 `~/Library/Caches/vox`。将来的桌面 App 也共用 `~/.vox`，它自己的内部状态才放 Application Support。
 - 模型下载默认走 ModelScope，按 HuggingFace 哈希校验。
 
 ## Capabilities and Constraints

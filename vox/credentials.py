@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import os
 import stat
-from pathlib import Path
 
-PATH = Path(os.environ.get("VOX_CONFIG", Path.home() / ".config" / "vox")) / "credentials.json"
+from . import paths
+
+PATH = paths.CREDENTIALS
 
 
 def _read() -> dict:

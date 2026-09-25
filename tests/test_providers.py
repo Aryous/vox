@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TMP = Path(tempfile.mkdtemp(prefix="vox-test-"))
 os.environ["VOX_CONFIG"] = str(TMP / "cfg")          # 凭证写到临时目录，不碰真实配置
 os.environ["VOX_HOME"] = str(TMP / "home")
-(TMP / "home").mkdir()
-(TMP / "home" / "kokoro-voices.json").write_text('["zf_001", "zm_010"]')   # Kokoro 音色清单平时联网取一次，测试里预置，保持离线
+(TMP / "home" / "cache").mkdir(parents=True)
+(TMP / "home" / "cache" / "kokoro-voices.json").write_text('["zf_001", "zm_010"]')   # Kokoro 音色清单平时联网取一次，测试里预置，保持离线
 
 from vox import audio, catalog, credentials, discovery, fetch, hub  # noqa: E402
 from vox.providers import base  # noqa: E402

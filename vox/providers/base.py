@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .. import credentials
+from .. import credentials, paths
 
-CACHE = Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox")) / "voices"
+CACHE = paths.VOICE_LISTS
 UA = "vox-tts/0.2 (+https://github.com/Aryous/vox)"
 _PULLING: set[str] = set()   # 正在后台拉音色列表的模型
 

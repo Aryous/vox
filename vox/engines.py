@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import sys
 import warnings
 from pathlib import Path
 
 import numpy as np
 
+from . import paths
+
 warnings.filterwarnings("ignore")
-CACHE = Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox"))
 
 
 class Engine:
@@ -83,7 +83,7 @@ class Kokoro(Engine):
         self._zh = KPipeline(lang_code="z", repo_id=self.model, model=KModel(repo_id=self.model).eval(), en_callable=en_cb)
 
     def voices(self):
-        cache = CACHE / "kokoro-voices.json"  # 音色清单只需联网取一次
+        cache = paths.KOKORO_VOICES  # 音色清单只需联网取一次
         if cache.exists():
             return json.loads(cache.read_text())
         from huggingface_hub import list_repo_files

@@ -148,6 +148,19 @@ Provider 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（M
 
 ## 数据与卸载
 
-数据都在 `$VOX_HOME`（默认 `~/.cache/vox`）：`models/` 模型、`clips/` 合成结果、`samples/` 音色样本、`history.json`、`my_voices.json`、`settings.json`、`models.json`（我的模型）、`discovered/`（在线列表缓存）、`voices/`（云端音色列表缓存）。Kokoro 模型在 `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M-v1.1-zh`。
+按「丢了能不能找回」分开存（`vox/paths.py` 统一决定，`vox status --json` 显示实际位置）：
 
-卸载：删除本目录、`~/.local/bin/vox`，以及上面两个数据目录。
+| | 位置 | 内容 |
+| --- | --- | --- |
+| 数据 | `~/.vox` | `clips/` 合成结果、`samples/` 音色样本、`history.json`、`my_voices.json`、`settings.json`、`models.json`（我的模型）。丢了找不回来，要进备份 |
+| 模型 | `~/.vox/models` | 下载的本地模型。能重新下载，已排除出 Time Machine 备份 |
+| 缓存 | `~/Library/Caches/vox`（Linux 为 `~/.cache/vox`） | 在线模型列表、云端音色列表、拉到的新版注册表。删了会自动重新获取 |
+| 凭证 | `~/.config/vox/credentials.json` | 权限 600；环境变量优先 |
+
+Kokoro 模型由它自己的库管理，在 `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M-v1.1-zh`。
+
+用 `~/.vox` 而不是 `~/Library/Application Support`：数据要被 CLI、本地服务、Agent 和将来的桌面 App 共用，和 Codex（`~/.codex`）、LM Studio（`~/.lmstudio`）、Ollama（`~/.ollama`）一样；路径短、没有空格，Linux 上一致。桌面 App 自己的内部状态才放 Application Support。
+
+环境变量：`VOX_HOME` 把数据整体挪走（没单独指定时模型和缓存也一起），`VOX_MODELS`、`VOX_CACHE`、`VOX_CONFIG` 分别单独指定。
+
+卸载：删除本目录、`~/.local/bin/vox`、`~/.vox`、`~/Library/Caches/vox`、`~/.config/vox`，以及上面的 Kokoro 目录。

@@ -1,4 +1,4 @@
-"""下载模型到 ~/.cache/vox/models/<repo>。
+"""下载模型到 ~/.vox/models/<repo>（位置见 paths.py）。
 
 文件清单和校验值（大文件 SHA256、小文件 git sha1）取自 HuggingFace 官方 API（权威来源）；文件本体可从 ModelScope 或 HuggingFace 下载，
 下载后逐个校验大小和哈希，不一致就删掉重来。国内网络下 HuggingFace CDN 常只有几 KB/s，默认走 ModelScope。
@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(os.environ.get("VOX_MODELS", Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox")) / "models"))
+from . import paths
+
+ROOT = paths.MODELS
 SOURCES = {
     "modelscope": "https://modelscope.cn/models/{repo}/resolve/master/{path}",
     "hf": "https://huggingface.co/{repo}/resolve/main/{path}",
@@ -65,6 +66,7 @@ def fetch(repo: str, source: str = "modelscope") -> Path:
     if is_ready(repo):
         print(f"✓ 已存在 {dest}", file=sys.stderr)
         return dest
+    paths.ensure_models_dir()
     files = _manifest(repo)
     total = sum(s for _, s, _ in files)
     print(f"{repo}：{len(files)} 个文件，{total / 1e9:.2f} GB，来源 {source}（哈希以 HuggingFace 为准）", file=sys.stderr)

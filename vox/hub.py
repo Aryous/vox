@@ -1,15 +1,14 @@
 """vox 核心：CLI、HTTP API、WebUI 共用的一切操作都在这里。
 
-数据目录（$VOX_HOME，默认 ~/.cache/vox）：
-  models/           模型文件（vox pull）
+数据目录 ~/.vox（位置与分类见 paths.py）：
   clips/            合成结果 wav（按请求哈希命名）
   samples/          音色样本
   history.json      合成历史（CLI / WebUI / API 共享）
   my_voices.json    自定义音色（模型 + 音色 + 指令 + 种子的组合）
   settings.json     设置（样本文本等）
   models.json       我的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
-  discovered/       各 Provider 在线模型列表的缓存
-  registry.json     vox models update 拉到的新版注册表
+  models/           下载的本地模型（不进 Time Machine 备份）
+缓存（在线列表、云端音色列表、新版注册表）在 ~/Library/Caches/vox，删了会重新获取。
 """
 from __future__ import annotations
 
@@ -23,11 +22,11 @@ import threading
 import time
 from pathlib import Path
 
-from . import audio, catalog, credentials, discovery, engines, fetch, providers
+from . import audio, catalog, credentials, discovery, engines, fetch, paths, providers
 
-HOME = engines.CACHE
-CLIPS, SAMPLES = HOME / "clips", HOME / "samples"
-HIST, MYV, SETTINGS = HOME / "history.json", HOME / "my_voices.json", HOME / "settings.json"
+HOME = paths.HOME
+CLIPS, SAMPLES = paths.CLIPS, paths.SAMPLES
+HIST, MYV, SETTINGS = paths.HISTORY, paths.MY_VOICES, paths.SETTINGS
 MPREFS = catalog.PREFS
 REGISTRY_URL = os.environ.get("VOX_REGISTRY_URL", "https://raw.githubusercontent.com/Aryous/vox/main/vox/registry.json")
 REQ_KEYS = ("model", "input", "voice", "instructions", "speed", "lang", "seed", *catalog.GEN)
@@ -571,7 +570,7 @@ def status() -> dict:
 
     return {"version": __version__, "uptime": round(time.time() - START), "memory_bytes": rss,
             "loaded": engines.loaded(),
-            "asr": bool(shutil.which("coli")), "ffmpeg": bool(shutil.which("ffmpeg")), "home": str(HOME)}
+            "asr": bool(shutil.which("coli")), "ffmpeg": bool(shutil.which("ffmpeg")), **paths.summary()}
 
 
 # ---------- Provider 与凭证 ----------

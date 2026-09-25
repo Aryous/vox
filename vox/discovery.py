@@ -6,7 +6,7 @@
   openai_models   OpenAI 风格的 GET {base}/models；match / exclude 按模型名过滤（列表里没有能力字段时只能这样认）
   elevenlabs      GET /v1/models，can_do_text_to_speech 标出 TTS 模型
   gemini          GET /v1beta/models（分页），按名字里的 tts 识别
-结果缓存到 $VOX_HOME/discovered/<provider>.json，catalog.rebuild() 会把它们并进模型目录。
+结果缓存到 <缓存目录>/discovered/<provider>.json（见 paths.py），catalog.rebuild() 会把它们并进模型目录。
 """
 from __future__ import annotations
 

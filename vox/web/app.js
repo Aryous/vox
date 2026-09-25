@@ -757,7 +757,7 @@ function renderProvider(el) {
   const canFetch = d && (d.public || p.connected), src = local ? 'HuggingFace' : p.name;
   const note = !d ? '这家没有公开的模型列表接口，列表来自 vox 注册表' : d.fetched ? `${ago(d.fetched)}从 ${esc(src)} 查询` : canFetch ? `可以从 ${esc(src)} 查询完整列表` : '连接后可以在线查询完整列表';
   el.innerHTML = `
-    <div class="pd-h">${pIcon(p.id, 32)}<div><h2>${esc(p.name)}</h2><p>${esc(p.about || `${p.region || ''}云端 TTS`)}</p></div><span class="sp"></span>
+    <div class="pd-h">${pIcon(p.id, 32)}<div><h2>${esc(p.name)}</h2><p>${esc(p.about || `${p.region || ''}云端 TTS`)}${local && S.status?.models ? ` · 存放在 <code class="mono">${esc(S.status.models.replace(/^\/Users\/[^/]+/, '~'))}</code>` : ''}</p></div><span class="sp"></span>
       ${local ? '' : `<a class="lnk" href="${esc(p.docs)}" target="_blank" rel="noopener">API 文档${ic('ext', 13)}</a>`}</div>
     ${local ? '' : connHtml(p)}
     <section class="sec"><div class="sec-h"><h3>我的模型</h3><span class="n">${my.length}</span></div>

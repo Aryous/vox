@@ -8,12 +8,13 @@
 数据与代码分开：
   代码（vox/providers/*.py、vox/engines.py）只负责「怎么调用」：每家的请求怎么拼、响应怎么解析。
   数据（vox/registry.json）负责「有什么」：Provider 的连接方式、适配器配置、已核对的模型元数据（能力、价格、音色）。
-  注册表随包发布，也可以用 vox models update 拉新版（存到 $VOX_HOME/registry.json，日期更新时优先生效）。
+  注册表随包发布，也可以用 vox models update 拉新版（存在缓存目录，日期更新时优先生效）。
 
 模型条目的三种来源（source 字段）：
   registry     注册表里核对过的模型
-  discovered   各 Provider 在线列表查到的模型（缓存在 $VOX_HOME/discovered/<provider>.json）
-  custom       用户手动添加的模型 ID（记在 $VOX_HOME/models.json）
+  discovered   各 Provider 在线列表查到的模型（缓存在 <缓存目录>/discovered/<provider>.json）
+  custom       用户手动添加的模型 ID（记在 ~/.vox/models.json）
+文件位置见 paths.py。
 在线查到、但注册表里没有的模型，借用 template 指向的同家模型的配置（请求格式相同），能力标记为 inferred（推断）。
 
 注册表字段：
@@ -31,11 +32,12 @@ import json
 import os
 from pathlib import Path
 
+from . import paths
+
 BUILTIN = Path(__file__).with_name("registry.json")
-HOME = Path(os.environ.get("VOX_HOME", Path.home() / ".cache" / "vox"))
-UPDATED = HOME / "registry.json"        # vox models update 拉到的新版注册表
-DISCOVERED = HOME / "discovered"        # 在线列表缓存
-PREFS = HOME / "models.json"            # 用户的模型清单：我的模型、手动添加
+UPDATED = paths.REGISTRY_UPDATE         # vox models update 拉到的新版注册表
+DISCOVERED = paths.DISCOVERED           # 在线列表缓存
+PREFS = paths.MY_MODELS                 # 用户的模型清单：我的模型、手动添加
 
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
 BASE_CAPS = {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True}
