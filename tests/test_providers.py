@@ -450,6 +450,99 @@ class VoiceCacheTest(unittest.TestCase):
             del e.fetch_voices
 
 
+class CustomProviderTest(unittest.TestCase):
+    """自定义 Provider：OpenAI 兼容的自建服务 / 代理 / 新厂商，配置只存最少的字段。"""
+
+    def tearDown(self):
+        for pid in list(hub._custom_cfgs()):
+            hub.provider_remove(pid)
+
+    def test_keyless_local_server(self):
+        fake = Fake({"data": [{"id": "kokoro"}, {"id": "whisper-1"}, {"id": "tts-1"}]})
+        old, discovery.http = discovery.http, fake
+        try:
+            r = hub.provider_save("my-kokoro", {"name": "我的 Kokoro", "base_url": "http://127.0.0.1:8880/v1/", "auth": False, "instructions": "none", "native_speed": True})
+        finally:
+            discovery.http = old
+        self.assertEqual((r["connected"], r["found"], r["key_env"]), (True, 3, None))
+        self.assertEqual(fake.calls[0]["url"], "http://127.0.0.1:8880/v1/models")
+        self.assertEqual(fake.calls[0]["headers"], {})                     # 不要 Key 的服务不发 Authorization
+        p = catalog.PROVIDERS["my-kokoro"]
+        self.assertEqual((p["custom"], p["letter"], p["base_url"]), (True, "我", "http://127.0.0.1:8880/v1"))
+        hub.add_model("my-kokoro/kokoro")
+        calls, _ = run(openai_compat, "my-kokoro/kokoro", Fake(MP3), input="你好", voice="af_bella", instructions="开心", speed=1.5)
+        c = calls[0]
+        self.assertEqual(c["url"], "http://127.0.0.1:8880/v1/audio/speech")
+        self.assertNotIn("Authorization", c["headers"])
+        self.assertEqual((c["body"]["model"], c["body"]["voice"], c["body"]["speed"]), ("kokoro", "af_bella", 1.5))
+        self.assertNotIn("instructions", c["body"])                       # 声明了不支持，就不传
+        m = next(x for x in hub.models("my-kokoro") if x["id"] == "my-kokoro/kokoro")
+        self.assertTrue(m["mine"])
+        self.assertFalse(m["inferred"])                                    # 能力是用户声明的，不标「推断」
+
+    def test_key_filter_and_prefix_instructions(self):
+        r = hub.provider_save("proxy", {"name": "Proxy", "base_url": "https://proxy.example/v1", "auth": True, "instructions": "prefix",
+                                        "model_filter": "TTS", "native_speed": False, "voices": "alloy, nova", "fetch_voices": False})
+        self.assertEqual((r["connected"], r["key_env"]), (False, "VOX_PROXY_API_KEY"))
+        with self.assertRaises(hub.VoxError):
+            hub.add_model("proxy/gpt-4o-mini-tts")                          # 没连接不能添加
+        fake = Fake({"data": [{"id": "gpt-4o-mini-tts"}, {"id": "gpt-5"}]})
+        old, discovery.http = discovery.http, fake
+        try:
+            r = hub.provider_save("proxy", {**hub._custom_cfgs()["proxy"]}, key="sk-proxy-1", overwrite=True)
+        finally:
+            discovery.http = old
+        self.assertEqual((r["connected"], r["found"]), (True, 1))           # 按 tts 过滤
+        self.assertEqual(fake.calls[0]["headers"]["Authorization"], "Bearer sk-proxy-1")
+        hub.add_model("proxy/gpt-4o-mini-tts")
+        m = catalog.find_model("proxy/gpt-4o-mini-tts")
+        self.assertEqual([v["voice"] for v in m["voices"]], ["alloy", "nova"])
+        calls, dur = run(openai_compat, "proxy/gpt-4o-mini-tts", Fake(MP3), input="你好", instructions="开心", speed=1.5)
+        b = calls[0]["body"]
+        self.assertEqual(b["input"], "开心<|endofprompt|>你好")
+        self.assertNotIn("speed", b)                                       # 不支持原生语速：交给 ffmpeg
+        self.assertAlmostEqual(dur, 0.2, delta=0.05)
+        self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer sk-proxy-1")
+        hub.provider_remove("proxy")
+        self.assertNotIn("proxy", catalog.PROVIDERS)
+        self.assertIsNone(credentials.get("VOX_PROXY_API_KEY"))             # 连同保存的 Key 一起删
+        self.assertIsNone(catalog.find_model("proxy/gpt-4o-mini-tts"))
+
+    def test_unreachable_server_is_a_clear_error(self):
+        def drop(*a, **k):
+            raise base.ProviderError("a.example 连接异常：RemoteDisconnected")
+        old, discovery.http = discovery.http, drop
+        try:
+            r = hub.provider_save("flaky", {"base_url": "http://a.example/v1", "auth": False})
+        finally:
+            discovery.http = old
+        self.assertIsNone(r["found"])
+        self.assertIn("连接异常", r["error"])                               # 保存成功，模型列表失败给出原因
+
+    def test_voice_list_formats(self):
+        from vox.providers.openai_compat import parse_voice_list
+        self.assertEqual([v["voice"] for v in parse_voice_list(["a", "b"])], ["a", "b"])
+        self.assertEqual([v["voice"] for v in parse_voice_list({"voices": ["af_bella"]})], ["af_bella"])
+        vs = parse_voice_list({"data": [{"voice_id": "v1", "name": "Nova", "gender": "female"}, {"id": "v2"}, {"foo": 1}]})
+        self.assertEqual([(v["voice"], v["name"], v["gender"]) for v in vs], [("v1", "Nova", "女"), ("v2", "v2", "")])
+
+    def test_validation(self):
+        for pid, cfg, msg in (("x", {"base_url": "http://a/v1"}, "ID"), ("ok-id", {"base_url": "ftp://a"}, "http"),
+                              ("openai", {"base_url": "http://a/v1"}, "内置"), ("ok-id", {"base_url": "http://a/v1", "instructions": "xml"}, "情绪")):
+            with self.assertRaises(hub.VoxError) as e:
+                hub.provider_save(pid, {"auth": False, **cfg})
+            self.assertIn(msg, str(e.exception))
+        old, discovery.http = discovery.http, Fake({"data": []})
+        try:
+            hub.provider_save("dup", {"base_url": "http://a/v1", "auth": False, "fetch_voices": False})
+        finally:
+            discovery.http = old
+        with self.assertRaises(hub.VoxError):
+            hub.provider_save("dup", {"base_url": "http://b/v1", "auth": False})
+        with self.assertRaises(hub.VoxError):
+            hub.provider_remove("openai")
+
+
 class GatewayTest(unittest.TestCase):
     def test_missing_key_message(self):
         credentials.delete("OPENAI_API_KEY")

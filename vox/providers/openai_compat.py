@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import quote
 
 from .. import credentials
 from .base import CloudEngine, ProviderError, clamp, http
@@ -21,26 +22,48 @@ from .base import CloudEngine, ProviderError, clamp, http
 CJK = re.compile(r"[㐀-鿿぀-ヿ가-힯]")
 
 
+def parse_voice_list(j) -> list[dict]:
+    """OpenAI 兼容服务的音色列表没有统一格式，常见几种都认：
+    ["af_bella", …]、{"voices": [...]}、{"data": [...]}；元素可以是字符串，或带 id / voice_id / voice / name 的对象。"""
+    items = j if isinstance(j, list) else (j.get("voices") or j.get("data") or []) if isinstance(j, dict) else []
+    out = []
+    for v in items:
+        if isinstance(v, str):
+            out.append({"voice": v, "name": v, "gender": "", "lang": "", "description": ""})
+        elif isinstance(v, dict):
+            vid = v.get("id") or v.get("voice_id") or v.get("voice") or v.get("name")
+            if vid:
+                g = {"female": "女", "male": "男", "女": "女", "男": "男"}.get(str(v.get("gender", "")).lower(), "")
+                out.append({"voice": str(vid), "name": v.get("name") or str(vid), "gender": g,
+                            "lang": v.get("lang") or v.get("language") or "", "description": v.get("description") or ""})
+    return out
+
+
 class OpenAICompat(CloudEngine):
     def __init__(self, model):
         super().__init__(model)
         self.c = model["compat"]
         self.provider = model["provider"]
-        self.credentials = (model["key_env"],)
+        self.credentials = (model["key_env"],) if model.get("key_env") else ()   # 自建服务可以不要 Key
 
     @property
     def base(self):
         return (credentials.get(self.c.get("base_env", "")) if self.c.get("base_env") else None) or self.c["base"]
 
     def _h(self):
+        if not self.credentials:
+            return {}
         return {"Authorization": f"{self.c.get('auth', 'Bearer')} {self.cred(self.m['key_env'])}"}
 
     def fetch_voices(self):
         lv = self.c.get("list_voices")
         if not lv:
             return None
-        _, _, raw = http("GET", lv["url"], self._h(), timeout=30)
+        url = lv["url"].replace("{base}", self.base).replace("{model}", quote(self.m["remote"], safe=""))
+        _, _, raw = http("GET", url, self._h(), timeout=30)
         j = json.loads(raw)
+        if lv["kind"] == "openai":
+            return parse_voice_list(j)
         if lv["kind"] == "inworld":
             return [{"voice": v["voiceId"], "name": v.get("displayName") or v["voiceId"], "gender": "",
                      "lang": v.get("langCode") or v.get("languageCode", ""), "description": v.get("description", "")} for v in j.get("voices", [])]

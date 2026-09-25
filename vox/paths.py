@@ -3,7 +3,8 @@
 按「丢了能不能找回」分四类：
 
   数据  ~/.vox                        合成结果 clips/、音色样本 samples/、history.json、my_voices.json、
-                                      settings.json、models.json（我的模型）。丢了找不回来，要进备份。
+                                      settings.json、models.json（我的模型）、providers.json（自定义 Provider）。
+                                      丢了找不回来，要进备份。
   模型  ~/.vox/models                 下载的本地模型。能重新下载，所以标记为不进 Time Machine 备份。
   缓存  ~/Library/Caches/vox（macOS）  在线模型列表、云端音色列表、拉到的新版注册表。删了会自动重新获取，
         $XDG_CACHE_HOME/vox（其他）    清理工具清掉也没关系。
@@ -48,6 +49,7 @@ HISTORY = HOME / "history.json"
 MY_VOICES = HOME / "my_voices.json"
 SETTINGS = HOME / "settings.json"
 MY_MODELS = HOME / "models.json"
+CUSTOM_PROVIDERS = HOME / "providers.json"
 
 # 缓存
 DISCOVERED = CACHE / "discovered"

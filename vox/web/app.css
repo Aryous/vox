@@ -345,6 +345,20 @@ details.adv[open]{display:flex;flex-direction:column;gap:12px}
 .pic.mono{background:currentColor;-webkit-mask:var(--src) center/contain no-repeat;mask:var(--src) center/contain no-repeat;color:var(--text)}
 .pic.letter{display:inline-grid;place-items:center;border-radius:5px;background:var(--text);color:var(--bg);font:700 calc(var(--s,16px) * .5)/1 var(--mono);letter-spacing:-.03em}
 
+.pv.add{color:var(--mute);margin-top:6px}
+.pv.add:hover{color:var(--text)}
+.presets{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pform{padding:16px;display:flex;flex-direction:column;gap:16px;overflow:visible}
+.pf-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px}
+.pf-grid .field.wide{grid-column:1 / -1}
+.pform details .pf-grid{margin-top:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.pf-key{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pf-key .in{flex:1 1 280px;max-width:440px}
+.pf-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)}
+.pf-check input{accent-color:var(--ink);margin:0}
+.pf-a{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line)}
+.note.ok{color:var(--ok)}
+
 /* ---------- API ---------- */
 .main>.card+.card{margin-top:16px}
 .base-card .lbl{margin-bottom:10px}
@@ -412,6 +426,7 @@ details.adv[open]{display:flex;flex-direction:column;gap:12px}
   .cr-diff{grid-column:3 / -1;grid-row:2}
   .cr-res{grid-column:1 / -1;grid-row:3}
   .ced{grid-template-columns:1fr;padding:4px 16px 16px}
+  .pf-grid,.pform details .pf-grid{grid-template-columns:1fr}
   .pickbar{bottom:64px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

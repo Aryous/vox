@@ -73,7 +73,7 @@ const LETTER_ICON = { inworld: 'In' };
 /* Provider 图标：LobeHub Icons（MIT）。单色图标用 CSS mask 跟随主题颜色；缺图标的用字母标。 */
 function pIcon(pid, size = 16) {
   const f = ICON[pid];
-  if (!f) return `<span class="pic letter" style="--s:${size}px" aria-hidden="true">${esc(LETTER_ICON[pid] || pid.slice(0, 2))}</span>`;
+  if (!f) return `<span class="pic letter" style="--s:${size}px" aria-hidden="true">${esc(LETTER_ICON[pid] || PV(pid)?.letter || pid.slice(0, 2))}</span>`;
   return MONO.has(f) ? `<span class="pic mono" style="--s:${size}px;--src:url(icons/${f}.svg)" aria-hidden="true"></span>` : `<img class="pic" src="icons/${f}.svg" width="${size}" height="${size}" alt="" aria-hidden="true">`;
 }
 const usable = m => m && ['ready', 'loaded'].includes(m.status);
@@ -151,7 +151,12 @@ function route() {
 }
 function render() {
   $$('.nav a').forEach(a => a.classList.toggle('on', a.dataset.route === S.route));
-  const main = $('#main'); main.innerHTML = ''; PAGES[S.route](main);
+  const main = $('#main'); main.innerHTML = '';
+  try { PAGES[S.route](main); }
+  catch (e) {   // 渲染出错时不留白：把错误摆出来，方便定位
+    console.error(e);
+    main.innerHTML = `<div class="empty"><b>这个页面出错了</b>${esc(e.message)}<br><span class="note">刷新试试；如果一直出现，把这段错误发给开发者。</span></div>`;
+  }
 }
 window.addEventListener('hashchange', () => { route(); $('#main').focus({ preventScroll: true }); scrollTo(0, 0); });
 
@@ -707,14 +712,14 @@ async function runAsr(id, main) {
 
 /* ============ 模型：左侧 Provider，右侧它的模型 ============ */
 // 「能不能用」是系统事实（本地下没下载、云端连没连上），不给开关；「我的模型」= 能用的模型里你留下的，音色库和试音台只显示这些。
-const GROUPS = [['local', '本地'], ['aggregator', '聚合'], ['cloud', '云端']];
-const pGroup = p => p.kind === 'local' ? 'local' : p.region === '聚合' ? 'aggregator' : 'cloud';
+const GROUPS = [['local', '本地'], ['aggregator', '聚合'], ['cloud', '云端'], ['custom', '自定义']];
+const pGroup = p => p.kind === 'local' ? 'local' : p.custom ? 'custom' : p.region === '聚合' ? 'aggregator' : 'cloud';
 const ago = t => { const d = Date.now() / 1000 - t; return d < 60 ? '刚刚' : d < 3600 ? `${Math.floor(d / 60)} 分钟前` : d < 86400 ? `${Math.floor(d / 3600)} 小时前` : `${Math.floor(d / 86400)} 天前`; };
 const fmtN = n => n >= 1e4 ? `${(n / 1e4).toFixed(1).replace(/\.0$/, '')} 万` : n.toLocaleString();
 S.disc = {}; S.mq = {}; S.keyEdit = null;
 
 function pageModels(main) {
-  const ps = S.providers, sub = S.sub === 'mine' || PV(S.sub) ? S.sub : 'mine';
+  const ps = S.providers, sub = S.sub === 'mine' || S.sub === 'new' || PV(S.sub) ? S.sub : 'mine';
   if (S.sub !== sub) history.replaceState(null, '', `#/models/${sub}`);
   S.sub = sub;
   const item = p => `<a class="pv ${p.id === sub ? 'on' : ''}" href="#/models/${p.id}" ${p.id === sub ? 'aria-current="page"' : ''}>${pIcon(p.id, 18)}<span class="pv-n">${esc(p.name)}</span>
@@ -726,14 +731,15 @@ function pageModels(main) {
       <nav class="mp-side" aria-label="Provider">
         <a class="pv ${sub === 'mine' ? 'on' : ''}" href="#/models/mine" ${sub === 'mine' ? 'aria-current="page"' : ''}>${ic('layers', 18)}<span class="pv-n">我的模型</span><span class="pv-c">${mine().length}</span></a>
         ${GROUPS.map(([g, t]) => { const list = ps.filter(p => pGroup(p) === g);
-          return list.length ? `<div class="mp-g"><span>${t}</span>${g === 'cloud' ? `<span>${list.filter(p => p.connected).length}/${list.length} 已连接</span>` : ''}</div>${list.map(item).join('')}` : ''; }).join('')}
+          return list.length || g === 'custom' ? `<div class="mp-g"><span>${t}</span>${g === 'cloud' ? `<span>${list.filter(p => p.connected).length}/${list.length} 已连接</span>` : ''}</div>${list.map(item).join('')}` : ''; }).join('')}
+        <a class="pv add ${sub === 'new' ? 'on' : ''}" href="#/models/new">${ic('plus', 18)}<span class="pv-n">添加 Provider</span></a>
         <div class="mp-foot" id="regInfo"></div>
       </nav>
       <section class="mp-main" id="pd"></section>
     </div>`;
   $('[data-copy]', main).onclick = e => copy(e.currentTarget.dataset.copy, '已复制命令');
   const pd = $('#pd', main);
-  sub === 'mine' ? renderMine(pd) : renderProvider(pd);
+  sub === 'mine' ? renderMine(pd) : sub === 'new' ? renderProviderForm(pd) : S.editProv === sub ? renderProviderForm(pd, PV(sub)) : renderProvider(pd);
   api('/api/registry').then(r => {
     const el = $('#regInfo', main); if (!el) return;
     el.innerHTML = `<span title="模型元数据（能力、价格、音色）来自注册表；vox models update 拉新版">注册表 ${esc(r.updated)} · ${r.from === 'builtin' ? '内置' : '已更新'}</span>`;
@@ -758,8 +764,9 @@ function renderProvider(el) {
   const note = !d ? '这家没有公开的模型列表接口，列表来自 vox 注册表' : d.fetched ? `${ago(d.fetched)}从 ${esc(src)} 查询` : canFetch ? `可以从 ${esc(src)} 查询完整列表` : '连接后可以在线查询完整列表';
   el.innerHTML = `
     <div class="pd-h">${pIcon(p.id, 32)}<div><h2>${esc(p.name)}</h2><p>${esc(p.about || `${p.region || ''}云端 TTS`)}${local && S.status?.models ? ` · 存放在 <code class="mono">${esc(S.status.models.replace(/^\/Users\/[^/]+/, '~'))}</code>` : ''}</p></div><span class="sp"></span>
-      ${local ? '' : `<a class="lnk" href="${esc(p.docs)}" target="_blank" rel="noopener">API 文档${ic('ext', 13)}</a>`}</div>
-    ${local ? '' : connHtml(p)}
+      ${p.docs ? `<a class="lnk" href="${esc(p.docs)}" target="_blank" rel="noopener">API 文档${ic('ext', 13)}</a>` : ''}
+      ${p.custom ? `<button class="btn sm" type="button" id="pEdit">${ic('edit', 14)}编辑</button><button class="btn ghost sm danger" type="button" id="pDel">删除</button>` : ''}</div>
+    ${local ? '' : p.credentials.length ? connHtml(p) : `<section class="sec conn"><div class="sec-h"><h3>连接</h3><span class="pill loaded">${ic('check', 12)}不需要 Key</span><span class="sp"></span><span class="note">${esc(p.base_url || '')}</span></div></section>`}
     <section class="sec"><div class="sec-h"><h3>我的模型</h3><span class="n">${my.length}</span></div>
       ${my.length ? `<div class="mlist">${my.map(modelRow).join('')}</div>` : `<p class="sec-empty">${local ? '还没有下载模型。从下面挑一个，下载后完全离线运行。' : !p.connected ? (rec ? `连接后，默认加上 ${rec} 个 vox 核对过的模型；更多模型在下面添加。` : '连接后，从下面添加想用的模型。') : '还没有添加模型。从下面添加。'}</p>`}
     </section>
@@ -774,10 +781,82 @@ function renderProvider(el) {
   bindProvider(el, p);
   if (d && d.public && !d.fetched && !st) fetchModels(el, p);   // 公开列表：第一次打开时自动查
 }
+/* ---------- 自定义 Provider：添加 / 编辑 ---------- */
+// 目前一种类型：OpenAI 兼容（POST {Base URL}/audio/speech），覆盖自建服务、代理和多数新厂商。
+const PROVIDER_PRESETS = [
+  { label: 'Kokoro-FastAPI（本机）', id: 'kokoro-fastapi', config: { name: 'Kokoro-FastAPI', base_url: 'http://127.0.0.1:8880/v1', auth: false, instructions: 'none' } },
+  { label: '另一台 vox', id: 'other-vox', config: { name: '另一台 vox', base_url: 'http://127.0.0.1:8765/v1', auth: false, instructions: 'instructions' } },
+  { label: 'OpenAI 兼容代理', id: 'openai-proxy', config: { name: 'OpenAI 代理', base_url: 'https://', auth: true, instructions: 'instructions', model_filter: 'tts' } },
+];
+const slug = t => String(t || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+function renderProviderForm(el, p) {
+  const editing = !!p, c = { auth: true, instructions: 'instructions', native_speed: true, fetch_voices: true, ...(p?.config || S.pform || {}) };
+  const pid = editing ? p.id : (S.pformId || '');
+  el.innerHTML = `
+    <div class="pd-h"><span class="pd-ic">${editing ? pIcon(p.id, 28) : ic('plus', 22)}</span><div><h2>${editing ? `编辑 ${esc(p.name)}` : '添加 Provider'}</h2>
+      <p>接入任何 OpenAI 兼容的语音服务：本机自建的（Kokoro-FastAPI、LocalAI…）、代理、或 vox 还没收录的厂商。vox 会调用 <code class="mono">POST {Base URL}/audio/speech</code>。</p></div></div>
+    ${editing ? '' : `<div class="presets"><span class="note">快速填写</span>${PROVIDER_PRESETS.map((x, i) => `<button class="chip" type="button" data-preset="${i}">${esc(x.label)}</button>`).join('')}</div>`}
+    <form class="sec pform" id="pform" autocomplete="off">
+      <div class="pf-grid">
+        <div class="field"><div class="lbl"><span>名称</span></div><input class="in" name="name" value="${esc(c.name || '')}" placeholder="例如：我的 Kokoro" required></div>
+        <div class="field"><div class="lbl"><span>ID</span><span class="key">命令行和模型 ID 里用</span></div><input class="in mono" name="id" value="${esc(pid)}" placeholder="my-kokoro" ${editing ? 'disabled' : ''} pattern="[a-z0-9][a-z0-9-]{1,31}" required></div>
+        <div class="field"><div class="lbl"><span>类型</span></div><select class="in" name="type"><option value="openai">OpenAI 兼容</option></select></div>
+        <div class="field wide"><div class="lbl"><span>Base URL</span><span class="key">到 /v1 为止</span></div><input class="in mono" name="base_url" value="${esc(c.base_url || '')}" placeholder="http://127.0.0.1:8880/v1" required spellcheck="false"></div>
+        <div class="field wide"><div class="lbl"><span>API Key</span></div>
+          <div class="pf-key"><div class="seg" role="group" aria-label="是否需要 Key"><button type="button" data-auth="1" class="${c.auth ? 'on' : ''}">需要</button><button type="button" data-auth="0" class="${c.auth ? '' : 'on'}">不需要（本机自建常见）</button></div>
+          ${c.auth ? `<input class="in mono" name="key" type="password" placeholder="${editing && p.connected ? '已保存；粘贴新值以替换' : '粘贴 Key（也可以之后再填）'}" spellcheck="false">` : ''}</div></div>
+      </div>
+      <details class="adv" ${editing ? 'open' : ''}><summary>兼容选项</summary>
+        <div class="pf-grid">
+          <div class="field"><div class="lbl"><span>情绪指令怎么传</span><span class="key">instructions</span></div>
+            <select class="in" name="instructions">${[['instructions', 'instructions 字段（OpenAI 写法）'], ['instruction', 'instruction 字段'], ['prefix', '写进正文：指令<|endofprompt|>正文'], ['none', '不支持']].map(([k, t]) => `<option value="${k}" ${c.instructions === k ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+          <div class="field"><div class="lbl"><span>模型列表只保留名字含</span><span class="key">可空</span></div><input class="in mono" name="model_filter" value="${esc(c.model_filter || '')}" placeholder="例如 tts"></div>
+          <label class="pf-check"><input type="checkbox" name="native_speed" ${c.native_speed ? 'checked' : ''}> 服务支持 speed 参数（不勾则由 vox 用 ffmpeg 变速）</label>
+          <label class="pf-check"><input type="checkbox" name="fetch_voices" ${c.fetch_voices ? 'checked' : ''}> 从 <code class="mono">{Base URL}/audio/voices</code> 获取音色列表</label>
+          <div class="field wide"><div class="lbl"><span>手动指定音色</span><span class="key">逗号分隔，可空</span></div><input class="in mono" name="voices" value="${esc((c.voices || []).join(', '))}" placeholder="alloy, echo, nova"></div>
+        </div>
+      </details>
+      <div class="pf-a"><button class="btn" type="button" id="pfTest">${ic('refresh', 14)}测试连接</button><span class="note" id="pfRes"></span><span class="sp"></span>
+        <a class="btn ghost" href="#/models/${editing ? p.id : 'mine'}" id="pfCancel">取消</a><button class="btn primary" type="submit">${editing ? '保存' : '添加'}</button></div>
+    </form>`;
+  const f = $('#pform', el), fe = n => f.elements.namedItem(n), val = () => {
+    const d = Object.fromEntries(new FormData(f));
+    return { id: editing ? p.id : (d.id || '').trim(), key: d.key || null,
+      config: { name: d.name.trim(), type: d.type, base_url: d.base_url.trim(), auth: c.auth, instructions: d.instructions, model_filter: d.model_filter.trim(),
+        native_speed: !!fe('native_speed').checked, fetch_voices: !!fe('fetch_voices').checked, voices: d.voices.split(',').map(x => x.trim()).filter(Boolean) } };
+  };
+  const keep = () => { const v = val(); S.pform = v.config; S.pformId = v.id; };
+  const fid = fe('id'), fname = fe('name');
+  onText(fname, () => { if (!editing && (!fid.value || fid.dataset.auto)) { fid.value = slug(fname.value) || fid.value; fid.dataset.auto = '1'; } });
+  fid.oninput = () => { delete fid.dataset.auto; };
+  $$('[data-auth]', f).forEach(b => b.onclick = () => { keep(); S.pform.auth = b.dataset.auth === '1'; c.auth = S.pform.auth; renderProviderForm(el, p); });
+  $$('[data-preset]', el).forEach(b => b.onclick = () => { const x = PROVIDER_PRESETS[+b.dataset.preset]; S.pform = { ...x.config }; S.pformId = x.id; renderProviderForm(el); $('[name=base_url]', el).focus(); });
+  $('#pfCancel', el).onclick = () => { S.pform = null; S.pformId = ''; S.editProv = null; };
+  $('#pfTest', el).onclick = async () => {
+    const v = val(), res = $('#pfRes', el), b = $('#pfTest', el); b.disabled = true; res.className = 'note'; res.textContent = '连接中…';
+    try {
+      const r = await api('/api/providers/test', editing && !v.key && p.connected ? { id: p.id } : { config: v.config, key: v.key });
+      res.className = r.ok ? 'note ok' : 'err';
+      res.textContent = r.ok ? `连得上：${r.models.length} 个模型${r.voices != null ? `，${r.voices} 个音色` : '；没有音色列表接口，可以手动填音色'}${r.models.length ? `（${r.models.slice(0, 3).join('、')}${r.models.length > 3 ? '…' : ''}）` : ''}` : r.error;
+    } catch (e) { res.className = 'err'; res.textContent = e.message; }
+    b.disabled = false;
+  };
+  f.onsubmit = async e => {
+    e.preventDefault(); const v = val();
+    try {
+      const r = await api('/api/providers/add', { id: v.id, config: v.config, key: v.key, overwrite: editing });
+      S.pform = null; S.pformId = ''; S.editProv = null;
+      await afterModels();
+      toast(`${editing ? '已保存' : '已添加'} ${v.config.name || v.id}${r.found != null ? `，查到 ${r.found} 个模型` : r.error ? '；模型列表没查到，可以手动添加模型 ID' : ''}`, 4000);
+      location.hash = `#/models/${r.provider}`; if (S.sub === r.provider) rerender();
+    } catch (err) { toast(err.message, 5000); }
+  };
+}
+
 function connHtml(p) {
   const env = p.credentials[0]?.env;
   return `<section class="sec conn"><div class="sec-h"><h3>连接</h3>${p.connected ? `<span class="pill loaded">${ic('check', 12)}已连接</span>` : '<span class="pill needs_key">未连接</span>'}<span class="sp"></span>
-      <a class="lnk" href="${esc(p.console)}" target="_blank" rel="noopener">申请 Key${ic('ext', 13)}</a></div>
+      ${p.console ? `<a class="lnk" href="${esc(p.console)}" target="_blank" rel="noopener">申请 Key${ic('ext', 13)}</a>` : ''}</div>
     ${p.credentials.map(c => keyField(p, c, false)).join('')}
     ${p.optional.length ? `<details class="adv"><summary>可选设置</summary>${p.optional.map(c => keyField(p, c, true)).join('')}</details>` : ''}
     <details class="adv"><summary>Key 存在哪里？</summary><div class="keynote">两种方式都行，<b>环境变量优先</b>：
@@ -858,6 +937,12 @@ async function fetchModels(el, p) {
 }
 function bindProvider(el, p) {
   bindRows(el);
+  const pe = $('#pEdit', el); if (pe) pe.onclick = () => { S.editProv = p.id; renderProviderForm(el, p); };
+  const pdl = $('#pDel', el); if (pdl) pdl.onclick = async () => {
+    if (!pdl.classList.contains('armed')) { pdl.classList.add('armed'); pdl.textContent = '确认删除这个 Provider'; setTimeout(() => { pdl.classList.remove('armed'); pdl.textContent = '删除'; }, 4000); return; }
+    try { await api('/api/providers/remove', { id: p.id }); } catch (e) { return toast(e.message, 5000); }
+    toast(`已删除 ${p.name}（它在我的模型里的条目和保存的 Key 一并删除）`, 4000); await afterModels(); location.hash = '#/models/mine';
+  };
   $$('form[data-env]', el).forEach(f => f.onsubmit = async e => {
     e.preventDefault(); const inp = $('input', f), v = inp.value.trim(); if (!v) return inp.focus();
     const was = p.connected;

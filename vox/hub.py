@@ -588,6 +588,116 @@ def provider_list() -> list[dict]:
     return out
 
 
+# ---------- 自定义 Provider ----------
+# 用户自己加的服务（本机的 Kokoro-FastAPI、代理、新厂商……）。配置存在 ~/.vox/providers.json，Key 和内置的一样
+# 走环境变量 / 凭证文件（变量名 VOX_<ID>_API_KEY）。展开逻辑见 catalog.custom_provider。
+PID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+
+
+def _custom_cfgs() -> dict:
+    return _load(paths.CUSTOM_PROVIDERS, {})
+
+
+def _clean_cfg(cfg: dict) -> dict:
+    base = str(cfg.get("base_url", "")).strip().rstrip("/")
+    if not re.match(r"^https?://[^\s/]+", base):
+        raise VoxError("Base URL 要以 http:// 或 https:// 开头，例如 http://127.0.0.1:8880/v1")
+    t = cfg.get("type", "openai")
+    if t not in catalog.PROVIDER_TYPES:
+        raise VoxError(f"不支持的类型 {t}，可选：{', '.join(catalog.PROVIDER_TYPES)}")
+    mode = cfg.get("instructions", "instructions")
+    if mode not in catalog.INSTRUCTION_MODES:
+        raise VoxError(f"情绪指令写法只能是：{', '.join(catalog.INSTRUCTION_MODES)}")
+    voices = cfg.get("voices") or []
+    voices = [v.strip() for v in (voices.split(",") if isinstance(voices, str) else voices) if str(v).strip()]
+    out = {"name": str(cfg.get("name") or "").strip(), "type": t, "base_url": base, "auth": bool(cfg.get("auth", True)),
+           "instructions": mode, "native_speed": bool(cfg.get("native_speed", True)), "fetch_voices": bool(cfg.get("fetch_voices", True)),
+           "voices": voices, "model_filter": str(cfg.get("model_filter") or "").strip()}
+    return {k: v for k, v in out.items() if v not in ("", [])} | {"auth": out["auth"]}
+
+
+def provider_save(pid: str, cfg: dict, key: str | None = None, overwrite: bool = False) -> dict:
+    """新增或修改自定义 Provider；有 Key 就一起保存，能连上就顺带查一次模型列表。"""
+    pid = (pid or "").strip().lower()
+    if not PID_RE.match(pid):
+        raise VoxError("ID 用 2–32 个小写字母、数字或连字符，例如 my-kokoro")
+    existing = _custom_cfgs()
+    if pid in catalog.PROVIDERS and not catalog.PROVIDERS[pid].get("custom"):
+        raise VoxError(f"「{pid}」是内置 Provider 的 ID，换一个")
+    if pid in existing and not overwrite:
+        raise VoxError(f"已经有叫「{pid}」的自定义 Provider；要修改请用编辑")
+    clean = _clean_cfg(cfg)
+    with FILE_LOCK:
+        cfgs = _custom_cfgs()
+        cfgs[pid] = clean
+        _save(paths.CUSTOM_PROVIDERS, cfgs)
+    catalog.rebuild()
+    providers.reset()
+    p = catalog.PROVIDERS[pid]
+    if key and key.strip() and p.get("key_env"):
+        set_key(p["key_env"], key.strip())
+    found, err = None, None
+    if connected(pid):
+        try:
+            found = len(discovery.run(pid)["items"])
+        except providers.ProviderError as e:
+            err = str(e)
+    return {"provider": pid, "key_env": p.get("key_env"), "connected": connected(pid), "found": found, "error": err}
+
+
+def provider_remove(pid: str) -> dict:
+    """删除自定义 Provider：配置、我的模型里它的模型、在线列表缓存，以及凭证文件里它的 Key（环境变量里的不动）。"""
+    p = catalog.PROVIDERS.get(pid)
+    if not p or not p.get("custom"):
+        raise VoxError(f"「{pid}」不是自定义 Provider，内置的不能删除")
+    env = p.get("key_env")
+    with FILE_LOCK:
+        cfgs = _custom_cfgs()
+        cfgs.pop(pid, None)
+        _save(paths.CUSTOM_PROVIDERS, cfgs)
+        pr = _prefs()
+        pr["mine"].pop(pid, None)
+        pr["custom"] = [c for c in pr["custom"] if c.get("provider") != pid]
+        _save(MPREFS, pr)
+    (catalog.DISCOVERED / f"{pid}.json").unlink(missing_ok=True)
+    if env:
+        credentials.delete(env)
+    catalog.rebuild()
+    providers.reset()
+    return {"provider": pid, "removed": True}
+
+
+def provider_test(cfg: dict | None = None, pid: str | None = None, key: str | None = None) -> dict:
+    """不保存，试连一次：GET {base}/models 和 {base}/audio/voices，返回查到的模型和音色数。"""
+    if pid:
+        p = catalog.PROVIDERS.get(pid)
+        if not p or not p.get("custom"):
+            raise VoxError(f"「{pid}」不是自定义 Provider")
+        clean, key = p["config"], key or (credentials.get(p["key_env"]) if p.get("key_env") else None)
+    else:
+        clean = _clean_cfg(cfg or {})
+    base, h = clean["base_url"], ({"Authorization": f"Bearer {key.strip()}"} if key and key.strip() else {})
+    if clean.get("auth") and not h:
+        raise VoxError("这个服务需要 Key：先填 Key 再测试")
+    out = {"base_url": base, "ok": False, "models": [], "voices": None, "error": None}
+    try:
+        _, _, body = providers.base.http("GET", f"{base}/models", h, timeout=15)
+        data = json.loads(body).get("data", [])
+        ids = [m.get("id") for m in data if isinstance(m, dict) and m.get("id")]
+        f = clean.get("model_filter", "").lower()
+        out.update(ok=True, models=[x for x in ids if not f or f in x.lower()][:100])
+    except (providers.ProviderError, ValueError, AttributeError) as e:
+        out["error"] = f"模型列表：{e}"
+    if clean.get("fetch_voices", True):
+        try:
+            from .providers.openai_compat import parse_voice_list
+            _, _, body = providers.base.http("GET", f"{base}/audio/voices", h, timeout=15)
+            out["voices"] = len(parse_voice_list(json.loads(body)))
+        except (providers.ProviderError, ValueError):
+            out["voices"] = None   # 很多服务没有音色列表接口，不算失败
+    return out
+
+
 def _forget_voice_failures(env: str):
     """换了 Key 就清掉之前拉音色失败的记录，让新 Key 立刻生效。"""
     for pid, p in catalog.PROVIDERS.items():

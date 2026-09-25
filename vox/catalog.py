@@ -23,6 +23,9 @@
   models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
                    recommended（连接后默认加进「我的模型」）/ about / languages …
   voice_sets       可复用的静态音色表
+
+自定义 Provider（~/.vox/providers.json）：用户自己加的服务，比如本机的 Kokoro-FastAPI、代理、新厂商。
+只存最少的配置（类型、地址、要不要 Key、几个兼容选项），在这里展开成和注册表一样的 Provider。
   price            {"amount", "currency", "per", "unit"}；unit 为 char / byte（UTF-8 字节）/ cjk2（汉字按 2 字符）/ token（只展示）
 """
 from __future__ import annotations
@@ -123,8 +126,47 @@ def materialize(entry: dict, source: str, templates: dict | None = None) -> dict
     if m["voices"] != "engine":
         m.setdefault("default_voice", (m["voices"][0]["voice"] if m["voices"] else None))
     m["source"] = source
-    m["inferred"] = entry.get("inferred", bool(entry.get("template")) and not entry.get("caps"))
+    m["inferred"] = False if p.get("custom") else entry.get("inferred", bool(entry.get("template")) and not entry.get("caps"))   # 自定义 Provider 的能力是用户声明的
     return m
+
+
+# 自定义 Provider 的类型：目前是 OpenAI 兼容（POST {base}/audio/speech），覆盖自建服务、代理和多数新厂商
+PROVIDER_TYPES = {"openai": {"label": "OpenAI 兼容", "adapter": "openai_compat"}}
+INSTRUCTION_MODES = {"instructions": "instructions 字段（OpenAI 写法）", "instruction": "instruction 字段", "prefix": "写进正文（指令<|endofprompt|>正文）", "none": "不支持"}
+
+
+def key_env_for(pid: str) -> str:
+    return "VOX_" + "".join(c if c.isalnum() else "_" for c in pid.upper()) + "_API_KEY"
+
+
+def _letter(name: str) -> str:
+    """字母图标：中文取一个字，英文取两个字母。"""
+    name = name.strip() or "?"
+    return name[0] if ord(name[0]) > 0x2E80 else (name[:2].title() if len(name) > 1 else name.upper())
+
+
+def custom_provider(pid: str, cfg: dict) -> dict:
+    """把自定义 Provider 的配置展开成完整的 Provider（和注册表里的同一结构）。"""
+    t = PROVIDER_TYPES.get(cfg.get("type", "openai"), PROVIDER_TYPES["openai"])
+    base = cfg["base_url"].rstrip("/")
+    needs_key = cfg.get("auth", True)
+    env = key_env_for(pid) if needs_key else None
+    mode = cfg.get("instructions", "instructions")
+    voices = [v.strip() for v in cfg.get("voices", []) if str(v).strip()]
+    caps = {"voices": bool(voices) or cfg.get("fetch_voices", True), "instructions": mode != "none", "design": False, "seed": False,
+            "native_speed": cfg.get("native_speed", True)}
+    params = [k for k, on in (("voice", caps["voices"]), ("instructions", caps["instructions"]), ("speed", True)) if on]
+    compat = {"base": base, "instructions": None if mode == "none" else mode, "speed": [0.25, 4] if caps["native_speed"] else None}
+    if cfg.get("fetch_voices", True):
+        compat["list_voices"] = {"url": "{base}/audio/voices?model={model}", "kind": "openai"}
+    return {"name": cfg.get("name") or pid, "kind": "cloud", "custom": True, "type": cfg.get("type", "openai"), "type_label": t["label"],
+            "icon": None, "letter": _letter(cfg.get("name") or pid), "region": "自定义", "base_url": base,
+            "about": f"自定义 Provider（{t['label']}）· {base}",
+            "credentials": [{"env": env, "label": "API Key"}] if env else [], "optional": [],
+            "console": cfg.get("console") or None, "docs": cfg.get("docs") or None,
+            "adapter": t["adapter"], "key_env": env, "compat": compat, "config": cfg,
+            "discover": {"kind": "openai_models", "public": not needs_key, **({"match": cfg["model_filter"].lower()} if cfg.get("model_filter") else {})},
+            "model_defaults": {"caps": caps, "params": params, "voices": voices, "languages": ["多语言"], "license": "自定义", "family": cfg.get("name") or pid}}
 
 
 def rebuild():
@@ -133,6 +175,9 @@ def rebuild():
     REG = load_registry()
     PROVIDERS.clear()
     PROVIDERS.update(REG["providers"])
+    for pid, cfg in _read(paths.CUSTOM_PROVIDERS, {}).items():   # 自定义 Provider 不能占用注册表里的 ID
+        if pid not in PROVIDERS and isinstance(cfg, dict) and cfg.get("base_url"):
+            PROVIDERS[pid] = custom_provider(pid, cfg)
     VOICE_SETS.clear()
     VOICE_SETS.update(REG.get("voice_sets", {}))
     out, seen = [], set()

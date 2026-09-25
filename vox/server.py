@@ -50,6 +50,9 @@ GET/POST /api/my-voices          自定义音色；POST /api/my-voices/delete {{
 GET  /api/status                 服务状态、已加载模型、内存
 GET  /api/providers              Provider 与连接状态；POST /api/keys {{"env","value"}} 保存凭证（不会回显）
 GET  /api/registry | POST /api/registry/update   模型注册表版本 / 拉取新版
+POST /api/providers/add {{"id","config":{{"name","base_url","auth","instructions","native_speed","fetch_voices","voices","model_filter"}},"key"?,"overwrite"?}}
+     自定义 Provider（OpenAI 兼容：自建服务、代理、新厂商）；POST /api/providers/test 同样的参数只试连不保存；POST /api/providers/remove {{"id"}}
+GET  /v1/audio/voices?model=     音色列表（扩展，与 Kokoro-FastAPI 同写法）：另一台 vox 可以把这台当自定义 Provider 接入
 
 ## CLI 等价
 vox models --json | vox models --all | vox models fetch openrouter | vox models add <模型 ID> | vox voices -m qwen3 --json | vox say "你好" -m qwen3 -v serena -i "轻快友好" --json
@@ -128,6 +131,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
+        if p == "/v1/audio/voices":   # 扩展：音色列表（与 Kokoro-FastAPI 等服务同一写法），别的 vox 或工具可以把 vox 当 Provider 接入
+            return self._run(lambda: {"voices": [{"id": v["voice"] if q.get("model") else v["ref"], "name": v["name"], "gender": v["gender"],
+                                                  "lang": v["lang"], "description": v["description"]}
+                                                 for v in hub.voices(model=q.get("model"), with_samples=False) if v["kind"] == "preset"]}, openai=True)
         if p == "/v1/models":
             return self._run(lambda: {"object": "list", "data": [
                 {"id": m["id"], "object": "model", "created": 0, "owned_by": m["provider"], "status": m["status"]} for m in hub.models(mine=True)]}, openai=True)
@@ -179,6 +186,9 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/models/add": lambda b: hub.add_model(b.get("model"), b.get("provider"), b.get("remote"), b.get("name")),
             "/api/models/remove": lambda b: hub.remove_model(b.get("model", ""), bool(b.get("delete_files"))),
             "/api/registry/update": lambda b: hub.registry_update(b.get("url")),
+            "/api/providers/add": lambda b: hub.provider_save(b.get("id", ""), b.get("config", {}), b.get("key"), bool(b.get("overwrite"))),
+            "/api/providers/remove": lambda b: hub.provider_remove(b.get("id", "")),
+            "/api/providers/test": lambda b: hub.provider_test(b.get("config"), b.get("id"), b.get("key")),
         }
         if p not in routes:
             return self.send_error(404)

@@ -11,6 +11,8 @@
   vox history --star              历史（与 WebUI 共享）
   vox batch script.json -o vo/    多角色脚本批量合成
   vox keys set MINIMAX_API_KEY    配置云端 Provider 的 Key（输入不回显）
+  vox providers add my-kokoro --base-url http://127.0.0.1:8880/v1 --no-key
+                                  自定义 Provider（OpenAI 兼容：自建服务、代理、新厂商）
   vox serve --open                本地服务：WebUI + OpenAI 兼容 API
 
 vox 服务在运行时（默认 http://127.0.0.1:8765），say / sample / load / unload 会交给服务执行，直接用已加载的模型。
@@ -273,6 +275,77 @@ def cmd_keys(a):
     _out(a, r, lambda: print(f"✓ 已从配置文件删除 {a.env}" + ("（环境变量里仍有值）" if r["configured"] else "")))
 
 
+def cmd_providers(a):
+    hub = _hub()
+    act = a.action or "list"
+    if act == "list":
+        ps = _server("/api/providers") or hub.provider_list()
+
+        def human():
+            for p in ps:
+                where = p.get("base_url") or ("本机" if p["kind"] == "local" else p.get("region", ""))
+                state = "本机" if p["kind"] == "local" else "已连接" if p["connected"] else "未连接"
+                print(f"{_pad(p['id'], 14)} {_pad(p['name'], 16)} {_pad(state, 7)} 我的模型 {_pad(f"{p['mine']}/{p['count']}", 6)} {'自定义 · ' if p.get('custom') else ''}{where}")
+        return _out(a, ps, human)
+    if not a.id:
+        raise SystemExit(f"vox providers {act} 需要 Provider ID，例如 vox providers {act} my-kokoro")
+    if act == "rm":
+        r = _server("/api/providers/remove", {"id": a.id}) or _call(hub.provider_remove, a.id)
+        return _out(a, r, lambda: print(f"✓ 已删除自定义 Provider {a.id}（连同它在我的模型里的条目和保存的 Key）"))
+    if act == "test" and not a.base_url:
+        r = _server("/api/providers/test", {"id": a.id}) or _call(hub.provider_test, None, a.id)
+        return _out(a, r, lambda: _print_test(r))
+    # add / edit：edit 在原配置上改；没给的选项保持不变
+    cur = {} if act == "add" else ((hub.catalog.PROVIDERS.get(a.id) or {}).get("config") or {})
+    if act == "edit" and not cur:
+        raise SystemExit(f"没有叫 {a.id} 的自定义 Provider")
+    cfg = {**cur, **{k: v for k, v in {"name": a.name, "base_url": a.base_url, "instructions": a.instructions, "voices": a.voices,
+                                        "model_filter": a.model_filter}.items() if v is not None}}
+    for flag, key in (("no_key", "auth"), ("no_native_speed", "native_speed"), ("no_fetch_voices", "fetch_voices")):
+        if getattr(a, flag):
+            cfg[key] = False
+    cfg.setdefault("auth", True)
+    key = None
+    if cfg.get("auth") and act == "add":
+        if sys.stdin.isatty():
+            import getpass
+
+            key = getpass.getpass("API Key（输入不回显；回车跳过，之后用 vox keys set 补）：") or None
+        else:
+            key = sys.stdin.read().strip() or None
+    if act == "test":
+        r = _server("/api/providers/test", {"config": cfg, "key": key}) or _call(hub.provider_test, cfg, None, key)
+        return _out(a, r, lambda: _print_test(r))
+    r = _server("/api/providers/add", {"id": a.id, "config": cfg, "key": key, "overwrite": act == "edit"}) or _call(hub.provider_save, a.id, cfg, key, act == "edit")
+
+    def human():
+        print(f"✓ 已{'保存' if act == 'edit' else '添加'}自定义 Provider {r['provider']}")
+        if r.get("key_env") and not r["connected"]:
+            print(f"  还没有 Key：vox keys set {r['key_env']}")
+        if r.get("found") is not None:
+            print(f"  查到 {r['found']} 个模型；vox models -p {r['provider']} --all 查看，vox models add {r['provider']}/<模型> 加进我的模型")
+        if r.get("error"):
+            print(f"  查询模型列表失败：{r['error']}（可以手动添加：vox models add {r['provider']}/<模型>）")
+    _out(a, r, human)
+
+
+def _pad(s, w):
+    """按显示宽度补空格（中文占两格），让中英混排的列对齐。"""
+    import unicodedata
+
+    n = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in str(s))
+    return str(s) + " " * max(0, w - n)
+
+
+def _print_test(r):
+    if r["ok"]:
+        print(f"✓ 连得上 {r['base_url']}：{len(r['models'])} 个模型" + (f"，{r['voices']} 个音色" if r.get("voices") is not None else "，没有音色列表接口（可以手动填音色）"))
+        for m in r["models"][:20]:
+            print(f"  {m}")
+    else:
+        print(f"✗ {r['error']}")
+
+
 def cmd_serve(a):
     from .server import serve
 
@@ -355,6 +428,19 @@ def main(argv=None):
     s.add_argument("env", nargs="?", help="凭证名，如 OPENAI_API_KEY")
     s.add_argument("--value", help="直接给值（会留在 shell 历史里；推荐不填，交互输入或从管道读）")
     s.set_defaults(fn=cmd_keys)
+
+    s = J(sub.add_parser("providers", help="Provider：list / add / edit / rm / test（自定义 Provider 用 OpenAI 兼容接口接入）"))
+    s.add_argument("action", nargs="?", choices=["list", "add", "edit", "rm", "test"])
+    s.add_argument("id", nargs="?", help="Provider ID，如 my-kokoro")
+    s.add_argument("--base-url", help="如 http://127.0.0.1:8880/v1（POST {base}/audio/speech）")
+    s.add_argument("--name", help="显示名")
+    s.add_argument("--no-key", action="store_true", help="这个服务不需要 Key（本机自建常见）")
+    s.add_argument("--instructions", choices=["instructions", "instruction", "prefix", "none"], help="情绪指令怎么传，默认 instructions")
+    s.add_argument("--no-native-speed", action="store_true", help="服务不支持 speed，改由 ffmpeg 变速")
+    s.add_argument("--voices", help="手动指定音色，逗号分隔")
+    s.add_argument("--no-fetch-voices", action="store_true", help="不去 {base}/audio/voices 拉音色列表")
+    s.add_argument("--model-filter", help="在线模型列表只保留名字含这个词的")
+    s.set_defaults(fn=cmd_providers)
 
     s = sub.add_parser("serve", help="启动本地服务：WebUI + OpenAI 兼容 API")
     s.add_argument("--port", type=int, default=8765)

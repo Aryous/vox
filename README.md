@@ -104,6 +104,7 @@ vox keys list                    # 每家需要哪些凭证、是否已配置、
 vox keys set MINIMAX_API_KEY     # 交互输入，不回显，不进 shell 历史
 echo "$KEY" | vox keys set OPENAI_API_KEY
 vox keys rm OPENAI_API_KEY
+vox providers                    # 全部 Provider：连接状态、我的模型数、自定义 Provider 的地址
 ```
 
 - **读取顺序：环境变量 > 本地配置文件**（`~/.config/vox/credentials.json`，权限 600，路径可用 `VOX_CONFIG` 改）。终端、脚本、Agent 用环境变量；日常在 WebUI「模型」页选中这家后粘贴即可。
@@ -129,6 +130,24 @@ Provider 只管连接（Key、地址），模型是另一回事。两件事分�
 - **代码**（`vox/providers/`、`vox/engines.py`）只负责怎么调用：每家的请求怎么拼、响应怎么解析。
 - **数据**（`vox/registry.json`）负责有什么：Provider 的连接方式与适配器配置、核对过的模型元数据（能力、价格、音色）。它随包发布，`vox models update` 可以拉新版（日期更新才生效；需要这个版本没有的适配器时提示升级 vox）。默认地址是本仓库的 `vox/registry.json`，可用 `VOX_REGISTRY_URL` 改。
 - 在线列表的结果缓存在 `$VOX_HOME/discovered/`，我的模型记在 `$VOX_HOME/models.json`。
+
+### 自定义 Provider
+
+任何 OpenAI 兼容的语音服务都能自己接进来：本机自建的（Kokoro-FastAPI、LocalAI…）、代理、vox 还没收录的厂商，或者另一台机器上的 vox。WebUI 在「模型」页左栏「添加 Provider」（带测试连接和常见服务的快速填写），命令行：
+
+```bash
+vox providers add my-kokoro --base-url http://127.0.0.1:8880/v1 --no-key --instructions none
+vox providers add my-proxy --base-url https://proxy.example/v1 --model-filter tts   # 会提示输入 Key（不回显）
+vox providers test my-kokoro                     # 试连：查 {base}/models 和 {base}/audio/voices
+vox providers edit my-kokoro --name "Kokoro（书房）"
+vox providers rm my-kokoro                       # 连同它在我的模型里的条目和保存的 Key
+vox models -p my-kokoro --all && vox models add my-kokoro/kokoro
+```
+
+- vox 调用 `POST {Base URL}/audio/speech`；模型列表来自 `GET {Base URL}/models`，音色列表来自 `GET {Base URL}/audio/voices`（没有这个接口时可以手动填音色）。
+- 兼容选项：情绪指令怎么传（`instructions` / `instruction` / 写进正文 / 不支持）、支不支持原生 `speed`（不支持就由 ffmpeg 变速）、模型列表按关键词过滤。
+- 配置存在 `~/.vox/providers.json`，Key 的变量名是 `VOX_<ID>_API_KEY`，和内置 Provider 一样走环境变量或凭证文件。
+- vox 自己也提供 `GET /v1/audio/voices?model=`（与 Kokoro-FastAPI 同写法），所以一台 vox 可以把另一台 vox 当 Provider 接入。
 
 ### 新增一家 Provider
 

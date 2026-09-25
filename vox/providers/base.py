@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import http.client as httpclient
 import json
 import threading
 import time
@@ -40,6 +41,8 @@ def http(method: str, url: str, headers: dict | None = None, body=None, timeout=
         raise ProviderError(f"连不上 {url.split('/')[2]}：{e.reason}") from None
     except TimeoutError:
         raise ProviderError(f"请求超时（{timeout}s）") from None
+    except (httpclient.HTTPException, ConnectionError, OSError) as e:   # 对方断开连接、返回的不是 HTTP 等
+        raise ProviderError(f"{url.split('/')[2]} 连接异常：{type(e).__name__} {e}".strip()) from None
 
 
 def _err_text(payload: bytes) -> str:

@@ -124,7 +124,8 @@ def openrouter(pid, p, d):
 def openai_models(pid, p, d):
     base = credentials.get(p.get("compat", {}).get("base_env", "")) if p.get("compat", {}).get("base_env") else None
     base = base or p["compat"]["base"]
-    _, _, raw = http("GET", f"{base}/models{d.get('query', '')}", {"Authorization": f"Bearer {_key(p)}"}, timeout=30)
+    key = _key(p)
+    _, _, raw = http("GET", f"{base}/models{d.get('query', '')}", {"Authorization": f"Bearer {key}"} if key else {}, timeout=30)
     out = []
     for m in json.loads(raw).get("data", []):
         mid = m.get("id", "")
