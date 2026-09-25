@@ -81,7 +81,7 @@ def fetch(repo: str, source: str = "modelscope") -> Path:
         subprocess.run(["curl", "-L", "--fail", "--retry", "5", "-C", "-", "-o", str(out), url] + ([] if size > 5e6 else ["-s"]), check=True)
         if out.stat().st_size != size or _digest(out, oid[0]) != oid[1]:
             out.unlink()
-            raise SystemExit(f"✗ 校验失败：{path}（已删除，重跑 vox fetch 会重新下载）")
+            raise SystemExit(f"✗ 校验失败：{path}（已删除，重跑 vox pull 会重新下载）")
     (dest / ".vox-complete").write_text(json.dumps({"repo": repo, "source": source}))
     print(f"✓ 校验通过，模型在 {dest}", file=sys.stderr)
     return dest

@@ -128,7 +128,7 @@ class _Qwen3(Engine):
         if not self._m:
             src = self._src()
             if not src:
-                raise SystemExit(f"模型未下载：先运行 vox fetch {self.name}（约 3 GB，走 ModelScope 并校验哈希）")
+                raise SystemExit(f"模型未下载：先运行 vox pull {self.name}（约 3 GB，走 ModelScope 并校验哈希）")
             from mlx_audio.tts.utils import load_model
 
             with contextlib.redirect_stdout(sys.stderr):  # 库在加载时会往 stdout 打日志

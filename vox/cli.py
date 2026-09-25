@@ -209,17 +209,15 @@ def cmd_batch(a):
     manifest = json.loads(mpath.read_text()) if mpath.exists() else {}
     roles, defaults = script.get("voices", {}), script.get("defaults", {})
     only = set(a.only.split(",")) if a.only else None
-    keys = ("model", "engine", "voice", "instructions", "instruct", "speed", "lang", "seed", *GEN)
+    keys = ("model", "voice", "instructions", "speed", "lang", "seed", *GEN)
     jobs = []
     for name, ln in _items(script):
         cfg = {**defaults, **roles.get(ln.get("who", ""), {}), **{k: ln[k] for k in keys if k in ln}}
-        if "engine" in cfg:  # 兼容旧脚本
-            cfg.setdefault("model", cfg.pop("engine"))
         if a.model:
             cfg["model"] = a.model
         if a.seed is not None:
             cfg.setdefault("seed", a.seed)
-        req = hub.normalize({**{k: cfg[k] for k in keys if k in cfg and k != "engine"}, "input": ln.get("v", ln["s"])})
+        req = hub.normalize({**{k: cfg[k] for k in keys if k in cfg}, "input": ln.get("v", ln["s"])})
         key = hashlib.sha1(json.dumps(req, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         fresh = manifest.get(name, {}).get("key") == key and (outdir / f"{name}.{a.format}").exists()
         if (only and name not in only) or (fresh and not a.force):
@@ -291,7 +289,7 @@ def main(argv=None):
         sp.add_argument("--json", action="store_true", help="输出 JSON（给脚本和 Agent）")
         return sp
 
-    s = J(sub.add_parser("models", aliases=["engines"], help="我的模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
+    s = J(sub.add_parser("models", help="我的模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
     s.add_argument("action", nargs="?", choices=["list", "fetch", "add", "rm", "update"])
     s.add_argument("target", nargs="?", help="Provider（fetch）、模型 ID（add / rm）或注册表地址（update）")
     s.add_argument("-p", "--provider", help="只看某一家")
@@ -299,7 +297,7 @@ def main(argv=None):
     s.add_argument("--name", help="手动添加时的显示名")
     s.add_argument("--delete-files", action="store_true", help="rm 本地模型时确认删除已下载的文件")
     s.set_defaults(fn=cmd_models)
-    s = J(sub.add_parser("pull", aliases=["fetch"], help="下载模型（ModelScope，按 HuggingFace 哈希校验）"))
+    s = J(sub.add_parser("pull", help="下载模型（ModelScope，按 HuggingFace 哈希校验）"))
     s.add_argument("model", help="模型 ID，如 qwen3、qwen3-design")
     s.add_argument("--source", default="modelscope", choices=["modelscope", "hf"])
     s.set_defaults(fn=cmd_pull)
@@ -322,9 +320,9 @@ def main(argv=None):
 
     s = J(sub.add_parser("say", help="合成一句话"))
     s.add_argument("text", help="文本；- 表示从标准输入读取")
-    s.add_argument("-m", "--model", "-e", "--engine", dest="model", help="模型 ID，默认 local/qwen3（环境变量 VOX_MODEL 可改）")
+    s.add_argument("-m", "--model", dest="model", help="模型 ID，默认 local/qwen3（环境变量 VOX_MODEL 可改）")
     s.add_argument("-v", "--voice", help="音色，如 serena；也可写引用 qwen3:serena / my:<id>")
-    s.add_argument("-i", "--instructions", "--instruct", dest="instructions", help="情绪 / 语气；声音设计模型里是声音描述")
+    s.add_argument("-i", "--instructions", dest="instructions", help="情绪 / 语气；声音设计模型里是声音描述")
     s.add_argument("-s", "--speed", type=float, help="语速 0.25–4")
     s.add_argument("--seed", type=int, help="随机种子（Qwen3 可复现）；不填则随机并记录")
     s.add_argument("-l", "--lang", help="语言，如 chinese、english、auto")

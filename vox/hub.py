@@ -427,8 +427,6 @@ def delete_my_voice(vid: str):
 def normalize(req: dict, strict=True) -> dict:
     """统一请求：解析模型、音色引用，丢掉模型不支持的参数。"""
     req = {k: v for k, v in req.items() if v not in (None, "")}
-    if "instruct" in req:
-        req["instructions"] = req.pop("instruct")
     if isinstance(req.get("voice"), dict):  # OpenAI 自定义音色对象 {"id": ...}
         req["voice"] = req["voice"].get("id")
     v = req.get("voice")

@@ -95,7 +95,7 @@ with client.audio.speech.with_streaming_response.create(
 }
 ```
 
-也支持 `scenes[].lines`（文件命名 `sXX_YY`，并输出网页可直接加载的 `timing.js`）。旧脚本里的 `engine` / `instruct` 仍然兼容。
+也支持 `scenes[].lines`（文件命名 `sXX_YY`，并输出网页可直接加载的 `timing.js`）。
 
 ## 云端 Provider 与 Key
 
