@@ -55,40 +55,6 @@ def _save(p: Path, data):
     tmp.replace(p)
 
 
-def _migrate():
-    """把旧版 WebUI 数据（~/.cache/vox/webui）搬到新位置，只做一次。"""
-    old = HOME / "webui"
-    if not old.exists() or HIST.exists():
-        return
-    hist = []
-    for h in _load(old / "history.json", []):
-        p = dict(h.get("params", {}))
-        eng = p.pop("engine", "qwen3")
-        if "instruct" in p:
-            p["instructions"] = p.pop("instruct")
-        req = {"model": "local/" + eng, "input": h.get("text", ""), **p}
-        hist.append({"id": h["id"], "ts": h["ts"], "source": "webui", "request": req, "dur": h["dur"], "elapsed": h["elapsed"], "asr": h.get("asr"), "star": h.get("star", False)})
-    CLIPS.mkdir(parents=True, exist_ok=True)
-    for f in (old / "clips").glob("*.wav"):
-        shutil.copy2(f, CLIPS / f.name)
-    _save(HIST, hist)
-    presets = _load(old / "presets.json", [])
-    if presets and not MYV.exists():
-        _save(MYV, [{"id": re.sub(r"\W+", "-", p["name"]).strip("-").lower() or f"v{i}", "name": p["name"], **_norm_voice_params(p["params"])} for i, p in enumerate(presets)])
-
-
-def _norm_voice_params(p):
-    p = dict(p)
-    if "engine" in p:
-        p["model"] = "local/" + p.pop("engine")
-    if "instruct" in p:
-        p["instructions"] = p.pop("instruct")
-    return {k: v for k, v in p.items() if k in REQ_KEYS}
-
-
-_migrate()
-
-
 # ---------- 模型 ----------
 # 「能不能用」是系统事实：本地模型下没下载、云端 Provider 连没连上（有没有 Key），不让用户开关。
 # 「想不想用」是用户选择：我的模型 = 能用的模型里，用户留下的那些。
