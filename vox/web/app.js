@@ -78,7 +78,8 @@ function pIcon(pid, size = 16) {
 }
 const usable = m => m && ['ready', 'loaded'].includes(m.status);
 const mine = () => S.models.filter(m => m.mine);
-const voiceName = (model, voice) => S.voices.find(v => v.model === model && v.voice === voice)?.name || voice;
+// 音色 ID 的显示名只取预置音色：「我的音色」也挂在同一个 model + voice 上，但名字里带着语气等附加信息
+const voiceName = (model, voice) => S.voices.find(v => v.model === model && v.voice === voice && v.kind === 'preset')?.name || voice;
 
 /* ---------- 全局播放器 ---------- */
 const P = { a: new Audio(), url: null, meta: null };
@@ -456,7 +457,7 @@ function takeHtml(t) {
   const h = t.rec, url = `/clips/${h.id}.wav`, rtf = h.elapsed / Math.max(h.dur, 0.01);
   return `<div class="take" style="--m:${hue(r.model)}">${head}
     <div class="take-w"><button class="pb" type="button" data-act="play" data-id="${h.id}" data-url="${url}" aria-label="播放">${ic('play', 13)}</button><canvas class="wave" data-url="${url}" data-id="${h.id}"></canvas></div>
-    <div class="meta"><span><b>${h.dur.toFixed(2)}s</b></span><span>合成 ${h.elapsed}s</span><span title="合成耗时 ÷ 音频时长，小于 1 表示比实时快">RTF ${rtf.toFixed(2)}</span>${r.speed ? `<span>${r.speed}×</span>` : ''}${r.seed != null ? `<span>种子 ${r.seed}</span>` : ''}${h.cached ? '<span>缓存</span>' : ''}${h.source && h.source !== 'webui' ? `<span>来自 ${esc(h.source)}</span>` : ''}${h.cost?.amount != null ? `<span title="${esc(h.cost.text)}">${h.cost.currency === 'CNY' ? '¥' : '$'}${h.cost.amount.toFixed(4)}</span>` : ''}${h.reproducible === false ? '<span title="这家 Provider 不支持随机种子，同样参数再生成可能不同">不可复现</span>' : ''}</div>
+    <div class="meta"><span><b>${h.dur.toFixed(2)}s</b></span><span>合成 ${h.elapsed}s</span><span title="合成耗时 ÷ 音频时长，小于 1 表示比实时快">RTF ${rtf.toFixed(2)}</span>${r.speed ? `<span>${r.speed}×</span>` : ''}${r.seed != null ? `<span>种子 ${r.seed}</span>` : ''}${h.cached ? '<span>缓存</span>' : ''}${h.source && h.source !== 'webui' ? `<span>来自 ${esc(h.source)}</span>` : ''}${h.cost?.amount != null ? `<span title="${esc(h.cost.text)}">${h.cost.currency === 'CNY' ? '¥' : '$'}${h.cost.amount.toFixed(4)}</span>` : ''}${h.reproducible === false ? '<span title="这家 Provider 不支持种子，同样的参数再生成，结果可能略有不同">不支持种子</span>' : ''}</div>
     <div class="asr" id="asr-${h.id}">${asrHtml(h)}</div>
     <div class="acts">
       <button class="btn ghost sm fav ${h.star ? 'on' : ''}" type="button" data-act="star" data-id="${h.id}" aria-pressed="${!!h.star}">${ic('star', 14)}${h.star ? '已收藏' : '收藏'}</button>
@@ -670,8 +671,7 @@ function candRow(c, tags) {
   else if (e.skip) bits.push({ t: `只支持情绪枚举，「${S.cmpBase.instructions}」按自然语气`, warn: 1 });
   else if (S.cmpBase.instructions && !e.canIns) bits.push({ t: '不支持语气指令', warn: 1 });
   if (e.own.speed) bits.push({ t: `${Number(e.speed).toFixed(2)}×`, ov: 1 });
-  if (!m.params.includes('seed')) bits.push({ t: '不可复现' });
-  else if (e.own.seed) bits.push({ t: c.seedMode === 'random' ? '随机种子' : `种子 ${c.seed}`, ov: 1 });
+  if (e.own.seed) bits.push({ t: c.seedMode === 'random' ? '随机种子' : `种子 ${c.seed}`, ov: 1 });
   if (!bits.some(x => x.ov || x.warn) && !m.caps.design) bits.unshift({ t: '统一设置' });
   const est = estimateNum(r);
   const state = !usable(m) ? `<span class="err">${m.provider === 'local' ? '模型还没下载' : `${esc(PV(m.provider)?.name || '')} 还没连接`}</span>`
@@ -685,7 +685,7 @@ function candRow(c, tags) {
       <span class="cr-l">${tag}</span>
       <button class="pb ${res?.busy ? 'busy' : ''}" type="button" data-cplay="${c.id}" ${ok && !res?.busy ? '' : 'disabled'} aria-label="${res?.rec ? '播放' : res?.queued ? '优先生成并播放' : '生成并播放'} ${tag}">${res?.busy ? '' : ic('play', 14)}</button>
       <button class="cr-who" type="button" data-cedit="${c.id}" aria-expanded="${open}"><b>${esc(candLabel(c))}${c.of ? `<i class="vtag">${tags[c.of]} 的变体</i>` : ''}</b><span>${m.provider === 'local' ? '<i class="dot"></i>' : pIcon(m.provider, 13)}<em title="${esc(m.name)}">${esc(m.name)}</em></span></button>
-      <button class="cr-diff" type="button" data-cedit="${c.id}" aria-label="编辑候选 ${tag}">${bits.map(x => `<span class="${x.ov ? 'ov' : x.warn ? 'warn' : ''}">${esc(x.t)}</span>`).join('')}${ic('edit', 13)}</button>
+      <button class="cr-diff" type="button" data-cedit="${c.id}" aria-label="编辑候选 ${tag}" ${m.params.includes('seed') ? '' : 'title="这个模型不支持种子：同样的参数再生成，结果可能略有不同"'}>${bits.map(x => `<span class="${x.ov ? 'ov' : x.warn ? 'warn' : ''}">${esc(x.t)}</span>`).join('')}${ic('edit', 13)}</button>
       <div class="cr-res">${state}</div>
       <div class="cr-a">
         <button class="btn ghost sm" type="button" data-cvar="${c.id}" title="基于这个候选做变体：单独调语气、语速或种子，和原来的并排比较">${ic('dup', 14)}变体</button>
@@ -715,7 +715,8 @@ function candEditor(c) {
       <input type="range" data-f="speed" min="0.5" max="2" step="0.05" value="${e.speed}" aria-label="语速"></div>
     ${has('seed') ? `<div class="field"><div class="lbl"><span>种子</span><span class="key">seed</span></div>
       <div class="seedrow"><div class="seg">${[['shared', '统一'], ['fixed', '固定'], ['random', '随机']].map(([k, t]) => `<button type="button" data-sm="${k}" class="${c.seedMode === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-      ${c.seedMode === 'fixed' ? `<input class="in mono" type="number" data-f="seed" value="${c.seed}" min="0" aria-label="种子">` : ''}</div></div>` : ''}
+      ${c.seedMode === 'fixed' ? `<input class="in mono" type="number" data-f="seed" value="${c.seed}" min="0" aria-label="种子">` : ''}</div></div>`
+      : `<div class="field"><div class="lbl"><span>种子</span><span class="key">seed</span></div><p class="note">这个模型不支持种子：同样的参数再生成，结果可能略有不同。</p></div>`}
     <div class="ced-a">${!c2.design && (e.own.instructions || e.own.speed) ? `<button class="btn sm" type="button" data-promote="${c.id}" title="把这个候选的语气和语速设为统一设置，所有候选都改用它">设为统一设置</button>` : ''}<span class="sp"></span><button class="btn sm" type="button" data-cdone>收起</button></div>
   </div>`;
 }
