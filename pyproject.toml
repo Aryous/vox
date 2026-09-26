@@ -1,8 +1,21 @@
 [project]
-name = "vox"
+name = "vox-tts"
 version = "0.1.0"
-description = "本地 TTS 命令行：一条命令调用 Kokoro / Qwen3-TTS 生成语音，支持多角色脚本批量合成"
+description = "One interface for every TTS model: local (Qwen3-TTS, Kokoro via MLX) and cloud providers, with a CLI, an OpenAI-compatible API and a web UI."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Aryous" }]
 requires-python = ">=3.10"
+keywords = ["tts", "text-to-speech", "mlx", "qwen3-tts", "kokoro", "openai-compatible", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
   "mlx-audio",
   "kokoro>=0.8.2",
@@ -13,11 +26,15 @@ dependencies = [
   "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Aryous/vox"
+Issues = "https://github.com/Aryous/vox/issues"
+
 [project.scripts]
 vox = "vox.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

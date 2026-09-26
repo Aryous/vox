@@ -15,10 +15,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .. import credentials, paths
+from .. import __version__, credentials, paths
 
 CACHE = paths.VOICE_LISTS
-UA = "vox-tts/0.2 (+https://github.com/Aryous/vox)"
+UA = f"vox-tts/{__version__} (+https://github.com/Aryous/vox)"
 _PULLING: set[str] = set()   # 正在后台拉音色列表的模型
 
 
