@@ -468,70 +468,170 @@ function takeHtml(t) {
     </div></div>`;
 }
 /* ============ 试音台 · 对比 ============ */
-// 场景：同一段文本，候选之间只差音色、模型或语气。候选纵向排成清单，点播放才生成，生成前给出费用预估。
-// 默认所有候选用同一个种子，差别只来自被比较的那一项。
+// 场景：同一段文本，候选之间只差音色或模型。语气、语速、种子默认都用「统一设置」，差别只来自被比较的那一项。
+// 听完想单独调某一个，就基于它做「变体」（B1、B2）：变体只记下和统一设置不同的参数，行上高亮标出。
+// 候选的 instructions / speed 为 null 表示跟随统一设置；声音设计模型的 instructions 是声音描述，永远属于候选自己。
 const modeSeg = () => `<div class="seg" role="group" aria-label="模式"><button type="button" data-mode="single" class="${S.compare ? '' : 'on'}">单路</button><button type="button" data-mode="compare" class="${S.compare ? 'on' : ''}">对比</button></div>`;
 function bindModeSeg(main) { $$('[data-mode]', main).forEach(b => b.onclick = () => { S.compare = b.dataset.mode === 'compare'; saveSlots(); pagePlayground(main); }); }
 const cid = () => Math.random().toString(36).slice(2, 8);
-Object.assign(S, { cands: store.get('cands', null), cmpSeed: store.get('cmpSeed', Math.floor(Math.random() * 1e6)), cmpRes: store.get('cmpRes', {}), cmpOpen: null, cmpPick: store.get('cmpPick', null), cmpPicker: false, cmpQ: '' });
-const saveCands = () => { store.set('cands', S.cands); store.set('cmpSeed', S.cmpSeed); store.set('cmpPick', S.cmpPick);
-  const ks = Object.keys(S.cmpRes); if (ks.length > 300) ks.slice(0, ks.length - 300).forEach(k => delete S.cmpRes[k]); store.set('cmpRes', S.cmpRes); };
+const doneRes = o => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v?.rec));   // 只存生成好的；排队、生成中、失败都不跨刷新保留
+Object.assign(S, { cands: store.get('cands', null), cmpBase: store.get('cmpBase', null), cmpSeed: store.get('cmpSeed', Math.floor(Math.random() * 1e6)), cmpRes: doneRes(store.get('cmpRes', {})), cmpOpen: null, cmpPick: store.get('cmpPick', null), cmpPicker: false, cmpQ: '' });
+const saveCands = () => { store.set('cands', S.cands); store.set('cmpBase', S.cmpBase); store.set('cmpSeed', S.cmpSeed); store.set('cmpPick', S.cmpPick);
+  const done = doneRes(S.cmpRes), ks = Object.keys(done); ks.slice(0, Math.max(0, ks.length - 300)).forEach(k => { delete done[k]; delete S.cmpRes[k]; }); store.set('cmpRes', done); };
+function newCand(p = {}) {
+  const s = newSlot({ model: p.model, voice: p.voice });
+  return { ...s, id: cid(), instructions: M(s.model)?.caps.design ? p.instructions || '' : null, speed: null, seedMode: 'shared' };
+}
 function ensureCands() {
   S.cands = (S.cands || []).filter(c => M(c.model));
-  if (S.cands.length) return;
-  const base = { ...slot(), seedMode: 'shared' }, alt = S.voices.find(v => v.model === base.model && v.kind === 'preset' && v.voice !== base.voice);
-  S.cands = [{ ...base, id: cid() }, ...(alt ? [{ ...base, id: cid(), voice: alt.voice }] : [])];
+  if (!S.cmpBase) {
+    // 旧版每个候选各存一整套参数：取第一个候选的语气和语速作统一设置，其他候选只保留和它不同的部分
+    const tone = c => !M(c.model).caps.design && M(c.model).params.includes('instructions'), f = S.cands.find(tone) || S.cands[0] || {};
+    S.cmpBase = { instructions: tone(f) ? f.instructions || '' : '', speed: f.speed ?? 1 };
+    S.cands.forEach(c => {
+      if (!M(c.model).caps.design && (!tone(c) || (c.instructions || '') === S.cmpBase.instructions)) c.instructions = null;
+      if (c.speed === S.cmpBase.speed) c.speed = null;
+    });
+  }
+  const ids = new Set(S.cands.map(c => c.id));
+  S.cands.forEach(c => { if (c.of && !ids.has(c.of)) delete c.of; });
+  if (!S.cands.length) {
+    const s = slot(), first = newCand({ model: s.model, voice: s.voice, instructions: s.instructions });
+    const alt = S.voices.find(v => v.model === first.model && v.kind === 'preset' && v.voice !== first.voice);
+    S.cands = [first, ...(alt ? [newCand({ model: first.model, voice: alt.voice })] : [])];
+  }
   saveCands();
 }
+// 候选实际用的参数：自己改过的优先，否则用统一设置
+function eff(c) {
+  const m = M(c.model), design = m.caps.design, canIns = m.params.includes('instructions'), ownIns = !design && canIns && c.instructions != null;
+  let ins = design ? c.instructions || '' : ownIns ? c.instructions : S.cmpBase.instructions;
+  // 只认情绪枚举的模型（如 MiniMax）用不了枚举以外的统一语气，按自然语气生成并在行上说明
+  const skip = !design && !ownIns && !!ins && canIns && m.instr_enum && !(m.instr_examples || []).includes(ins);
+  if (skip || !canIns) ins = '';
+  return { instructions: ins, speed: c.speed ?? S.cmpBase.speed, skip, canIns, own: { instructions: ownIns, speed: c.speed != null, seed: m.params.includes('seed') && c.seedMode !== 'shared' } };
+}
 function candReq(c) {
-  const r = reqOf(c, S.text.trim());
+  const e = eff(c), r = reqOf({ ...c, instructions: e.instructions, speed: e.speed }, S.text.trim());
   if (M(c.model).params.includes('seed') && c.seedMode === 'shared') r.seed = S.cmpSeed;
   return r;
 }
 const rkey = r => JSON.stringify(Object.keys(r).sort().map(k => [k, r[k]]));
-const candRes = c => { const r = candReq(c); return S.cmpRes[rkey(r)]; };
+const candRes = c => S.cmpRes[rkey(candReq(c))];
+const pending = res => res?.rec || res?.busy || res?.queued;
 const candLabel = c => { const m = M(c.model); return c.voice && m.caps.voices ? voiceName(m.id, c.voice) : m.caps.design ? '声音设计' : '默认音色'; };
+// A、B、C 给原始候选；变体紧跟在原候选后面，叫 B1、B2
+function candTags() {
+  const tags = {}, sub = {}; let n = 0;
+  S.cands.forEach(c => { if (c.of && tags[c.of]) { sub[c.of] = (sub[c.of] || 0) + 1; tags[c.id] = tags[c.of] + sub[c.of]; } else tags[c.id] = LETTER(n++); });
+  return tags;
+}
+
+/* 并行生成：云端每家同时 3 条；本地模型共用一块 GPU（服务端本来就串行），前端按顺序一条条送，免得占满浏览器的连接。
+   同一时间最多 4 个请求在路上（浏览器对同一地址最多 6 个连接，留两个给播放和其他接口）。 */
+const GENQ = { wait: [], run: new Map() };
+const LANE_MAX = { local: 1 }, CLOUD_MAX = 3, TOTAL_MAX = 4;
+function enqueue(main, c, { front = false, autoplay = false } = {}) {
+  const r = candReq(c), k = rkey(r), res = S.cmpRes[k];
+  const waiting = GENQ.wait.find(j => j.k === k);
+  if (waiting) { if (front) GENQ.wait = [waiting, ...GENQ.wait.filter(j => j !== waiting)]; waiting.autoplay ||= autoplay; pump(main); return; }
+  if (res?.rec || res?.busy) return;
+  const job = { k, r, c, autoplay, lane: M(r.model).provider };
+  S.cmpRes[k] = { queued: true };
+  if (front) GENQ.wait.unshift(job); else GENQ.wait.push(job);
+  pump(main);
+}
+function pump(main) {
+  for (const job of [...GENQ.wait]) {
+    if (GENQ.run.size >= TOTAL_MAX) break;
+    const busy = [...GENQ.run.values()].filter(l => l === job.lane).length;
+    if (busy >= (LANE_MAX[job.lane] ?? CLOUD_MAX)) continue;
+    GENQ.wait = GENQ.wait.filter(j => j !== job); GENQ.run.set(job.k, job.lane);
+    runJob(main, job);
+  }
+  refreshRows(main);
+}
+async function runJob(main, job) {
+  const m = M(job.r.model), cold = m.provider === 'local' && m.status !== 'loaded';
+  if (cold) toast(`第一次用 ${m.name}，要先加载模型（十几秒）`, 4000);
+  S.cmpRes[job.k] = { busy: true }; refreshRows(main);
+  try { const rec = await api('/api/speech', { ...job.r, source: 'webui' }); S.cmpRes[job.k] = { rec: { id: rec.id, dur: rec.dur, cost: rec.cost, request: rec.request } }; S.hist = [rec, ...S.hist.filter(h => h.id !== rec.id)]; }
+  catch (e) { S.cmpRes[job.k] = { err: e.message }; if (job.autoplay) toast(`生成失败：${e.message}`, 5000); }
+  GENQ.run.delete(job.k); saveCands();
+  if (cold) { refreshModels(); refreshStatus(); }
+  const here = S.route === 'playground' && S.compare, rec = S.cmpRes[job.k].rec;
+  if (job.autoplay && here && rec) play(`/clips/${rec.id}.wav`, candMeta(job.c));
+  pump(main);
+}
+function cancelQueue(main) { GENQ.wait.forEach(j => delete S.cmpRes[j.k]); GENQ.wait = []; refreshRows(main); }
+function playCand(main, c) {
+  const res = candRes(c);
+  if (res?.rec) return play(`/clips/${res.rec.id}.wav`, candMeta(c));
+  enqueue(main, c, { front: true, autoplay: true });
+}
+function genAll(main) { S.cands.filter(c => usable(M(c.model)) && !pending(candRes(c))).forEach(c => enqueue(main, c)); }
 
 function pageCompare(main) {
   ensureCands();
+  const b = S.cmpBase, ex = S.cat.instructions;
   main.innerHTML = `
-    <div class="head"><div><h1>试音台</h1><p>同一段文本，一次比较多个音色、模型或语气。每行一个候选，只显示和别人不同的地方；点播放才生成。</p></div>${modeSeg()}</div>
+    <div class="head"><div><h1>试音台</h1><p>同一段文本，一次比较多个音色或模型。先用同一组设置听一遍，再对想细调的候选做变体。</p></div>${modeSeg()}</div>
     <div class="compose cmp-text">
       <textarea class="in" id="text" aria-label="要合成的文本" placeholder="输入所有候选共用的文本…">${esc(S.text)}</textarea>
       <div class="compose-bar"><div class="chips">${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}">${esc(q.length > 16 ? q.slice(0, 16) + '…' : q)}</button>`).join('')}</div><span class="sp"></span><span class="count" id="count"></span></div>
     </div>
+    <section class="sec cmp-base">
+      <div class="sec-h"><h3>${ic('sliders', 15)}统一设置</h3><span class="note">所有候选都用这一组；候选单独改过的参数会在行上高亮</span></div>
+      <div class="base-f">
+        <div class="field b-ins"><div class="lbl"><span>情绪 / 语气</span><span class="key">instructions</span></div>
+          <input class="in" id="bIns" value="${esc(b.instructions)}" placeholder="留空为自然语气；例如：轻快友好" aria-label="统一的情绪或语气">
+          <div class="chips">${ex.slice(0, 6).map(t => `<button type="button" class="chip ${t === b.instructions ? 'on' : ''}" data-bex="${esc(t)}">${esc(t.length > 10 ? t.slice(0, 10) + '…' : t)}</button>`).join('')}</div></div>
+        <div class="field"><div class="lbl"><span>语速 <span class="val" id="bSpeedV">${Number(b.speed).toFixed(2)}×</span></span><span class="key">speed</span></div>
+          <input type="range" id="bSpeed" min="0.5" max="2" step="0.05" value="${b.speed}" aria-label="统一语速"></div>
+        <div class="field"><div class="lbl"><span>种子</span><span class="key">seed</span></div>
+          <div class="seedrow"><code class="mono" id="bSeed">${S.cmpSeed}</code><button class="btn ghost sm" type="button" id="reseed" title="换一个统一种子（只影响支持种子的模型）">${ic('dice', 14)}换一个</button></div></div>
+      </div>
+    </section>
     <section class="sec cmp">
-      <div class="sec-h"><h3>候选</h3><span class="n">${S.cands.length}</span>
-        <span class="note seedline">统一种子 <code class="mono">${S.cmpSeed}</code><button class="btn ghost sm" type="button" id="reseed" title="换一个统一种子（只影响支持种子的模型）">${ic('dice', 14)}换一个</button></span>
-        <span class="sp"></span><span class="note" id="cmpEst"></span><button class="btn primary sm" type="button" id="genAll"></button></div>
+      <div class="sec-h"><h3>候选</h3><span class="n" id="cmpN">${S.cands.length}</span>
+        <span class="sp"></span><span class="note" id="cmpEst"></span><button class="btn ghost sm" type="button" id="cmpStop" hidden>取消排队</button><button class="btn primary sm" type="button" id="genAll"></button></div>
       <div class="clist" id="clist"></div>
-      <div class="cmp-add"><button class="btn sm" type="button" id="addDup">${ic('dup', 14)}复制最后一个候选</button><button class="btn sm" type="button" id="addVoices">${ic('plus', 14)}按音色添加…</button>
-        <span class="note">选音色：用「按音色添加」一次加几个；调语气：复制一个候选再改语气。</span></div>
+      <div class="cmp-add"><button class="btn sm" type="button" id="addVoices">${ic('plus', 14)}按音色添加…</button><button class="btn sm" type="button" id="addOne">${ic('plus', 14)}加一个候选</button>
+        <span class="note">想换语气、语速或种子再听：在候选上点「变体」。</span></div>
       <div id="picker"></div>
     </section>
     <div id="pickbar"></div>`;
   const ta = $('#text', main);
   onText(ta, () => { S.text = ta.value; store.set('text', S.text); refreshRows(main); }, 150);
-  $$('[data-quick]', main).forEach(b => b.onclick = () => { ta.value = S.text = QUICK[+b.dataset.quick]; store.set('text', S.text); renderCands(main); });
+  $$('[data-quick]', main).forEach(x => x.onclick = () => { ta.value = S.text = QUICK[+x.dataset.quick]; store.set('text', S.text); refreshRows(main); });
   bindModeSeg(main);
-  $('#reseed', main).onclick = () => { S.cmpSeed = Math.floor(Math.random() * 1e6); saveCands(); pageCompare(main); };
+  const bi = $('#bIns', main), bexOn = () => $$('[data-bex]', main).forEach(x => x.classList.toggle('on', x.dataset.bex === b.instructions));
+  onText(bi, () => { b.instructions = bi.value.trim(); bexOn(); saveCands(); refreshRows(main); }, 250);
+  $$('[data-bex]', main).forEach(x => x.onclick = () => { b.instructions = b.instructions === x.dataset.bex ? '' : x.dataset.bex; bi.value = b.instructions; bexOn(); saveCands(); refreshRows(main); });
+  const bs = $('#bSpeed', main);
+  bs.oninput = () => { $('#bSpeedV', main).textContent = `${(+bs.value).toFixed(2)}×`; };
+  bs.onchange = () => { b.speed = +bs.value; saveCands(); refreshRows(main); };
+  $('#reseed', main).onclick = () => { S.cmpSeed = Math.floor(Math.random() * 1e6); $('#bSeed', main).textContent = S.cmpSeed; saveCands(); refreshRows(main); };
   $('#genAll', main).onclick = () => genAll(main);
-  $('#addDup', main).onclick = () => { const last = S.cands[S.cands.length - 1]; const c = { ...last, id: cid() }; S.cands.push(c); S.cmpOpen = c.id; saveCands(); renderCands(main); };
+  $('#cmpStop', main).onclick = () => cancelQueue(main);
+  $('#addOne', main).onclick = () => { const last = [...S.cands].reverse().find(c => !c.of) || S.cands[0]; const c = newCand({ model: last?.model, voice: last?.voice }); S.cands.push(c); S.cmpOpen = c.id; saveCands(); renderCands(main); };
   $('#addVoices', main).onclick = () => { S.cmpPicker = !S.cmpPicker; renderPicker(main); };
   renderCands(main); renderPicker(main);
 }
 function renderCands(main) {
   const list = $('#clist', main); if (!list) return;
-  list.innerHTML = S.cands.map(candRow).join('');
+  const tags = candTags();
+  list.innerHTML = S.cands.map(c => candRow(c, tags)).join('');
   $$('canvas.wave', list).forEach(cv => drawWave(cv, cv.dataset.url));
   renderCmpHead(main); bindCands(main); renderPickbar(main);
 }
-// 只重绘每行的摘要（音色、语气、结果），展开的编辑区原样保留：打字时不打断输入法、不丢光标
+// 只重绘每行的摘要（音色、差异、结果），展开的编辑区原样保留：打字时不打断输入法、不丢光标
 function refreshRows(main) {
   const list = $('#clist', main); if (!list) return;
-  $$('.cand', list).forEach((el, i) => {
-    const c = S.cands[i]; if (!c) return;
-    const tmp = document.createElement('div'); tmp.innerHTML = candRow(c, i);
+  const els = $$('.cand', list); if (els.length !== S.cands.length) return renderCands(main);
+  const tags = candTags();
+  els.forEach((el, i) => {
+    const tmp = document.createElement('div'); tmp.innerHTML = candRow(S.cands[i], tags);
     const fresh = tmp.firstElementChild;
     el.replaceChild(fresh.querySelector('.cr'), el.querySelector('.cr'));
     el.className = fresh.className; el.style.cssText = fresh.style.cssText;
@@ -540,118 +640,141 @@ function refreshRows(main) {
   renderCmpHead(main); bindCands(main); renderPickbar(main);
 }
 function renderCmpHead(main) {
-  $('#count', main).textContent = `${[...S.text].length} 字`;
-  // 预估：只算还没生成、能生成的候选
-  const todo = S.text.trim() ? S.cands.filter(c => usable(M(c.model)) && !candRes(c)?.rec && !candRes(c)?.busy) : [];
-  const ests = todo.map(c => estimateNum(candReq(c))).filter(Boolean), sum = {};
+  const cnt = $('#count', main); if (!cnt) return;
+  cnt.textContent = `${[...S.text].length} 字`;
+  $('#cmpN', main).textContent = S.cands.length;
+  const text = S.text.trim(), todo = text ? S.cands.filter(c => usable(M(c.model)) && !pending(candRes(c))) : [];
+  // 同样的请求只生成一次（变体刚复制出来、还没改参数时和原候选相同）
+  const uniq = [...new Map(todo.map(c => [rkey(candReq(c)), c])).values()];
+  const ests = uniq.map(c => estimateNum(candReq(c))).filter(Boolean), sum = {};
   ests.filter(e => !e.token).forEach(e => sum[e.cur] = (sum[e.cur] || 0) + e.v);
   const tok = ests.filter(e => e.token).length, cost = Object.entries(sum).map(([cur, v]) => money(v, cur));
-  $('#cmpEst', main).textContent = !S.text.trim() ? '先输入文本' : todo.length ? `${todo.length} 条未生成${cost.length ? ` · 云端约 ${cost.join(' + ')}` : todo.some(c => M(c.model).provider !== 'local') ? '' : ' · 都是本地模型，免费'}${tok ? ` · ${tok} 条按 token 计费` : ''}` : '都已生成';
-  const g = $('#genAll', main); g.hidden = !todo.length; g.innerHTML = `生成 ${todo.length} 条`;
+  const run = GENQ.run.size, wait = GENQ.wait.length;
+  const parts = [];
+  if (!text) parts.push('先输入文本');
+  else {
+    if (run || wait) parts.push(`生成中 ${run} 条${wait ? ` · 排队 ${wait} 条` : ''}`);
+    if (uniq.length) parts.push(`${uniq.length} 条未生成${cost.length ? ` · 云端约 ${cost.join(' + ')}` : uniq.some(c => M(c.model).provider !== 'local') ? '' : ' · 本地免费'}${tok ? ` · ${tok} 条按 token 计费` : ''}`);
+    if (!parts.length) parts.push('都已生成');
+  }
+  $('#cmpEst', main).textContent = parts.join(' · ');
+  $('#cmpStop', main).hidden = !wait;
+  const g = $('#genAll', main); g.hidden = !uniq.length; g.textContent = uniq.length > 1 ? `同时生成 ${uniq.length} 条` : '生成 1 条';
 }
-function candRow(c, i) {
-  const m = M(c.model), r = candReq(c), res = S.cmpRes[rkey(r)], open = S.cmpOpen === c.id, ok = usable(m) && S.text.trim();
-  const tone = m.caps.instructions ? (r.instructions ? `「${r.instructions}」` : m.caps.design ? '（还没写声音描述）' : '自然语气') : '';
-  const seed = m.params.includes('seed') ? (c.seedMode === 'random' ? '随机种子' : c.seedMode === 'fixed' ? `种子 ${c.seed}` : '') : '不可复现';
-  const bits = [tone, r.speed ? `${r.speed}×` : '', seed].filter(Boolean);
+function candRow(c, tags) {
+  const m = M(c.model), e = eff(c), r = candReq(c), res = S.cmpRes[rkey(r)], open = S.cmpOpen === c.id, ok = usable(m) && S.text.trim(), tag = tags[c.id];
+  // 摘要只写和统一设置不同的地方；ov = 这个候选单独改过的
+  const bits = [];
+  if (m.caps.design) bits.push({ t: e.instructions ? `「${e.instructions}」` : '还没写声音描述' });
+  else if (e.own.instructions) bits.push({ t: e.instructions ? `「${e.instructions}」` : '自然语气', ov: 1 });
+  else if (e.skip) bits.push({ t: `只支持情绪枚举，「${S.cmpBase.instructions}」按自然语气`, warn: 1 });
+  else if (S.cmpBase.instructions && !e.canIns) bits.push({ t: '不支持语气指令', warn: 1 });
+  if (e.own.speed) bits.push({ t: `${Number(e.speed).toFixed(2)}×`, ov: 1 });
+  if (!m.params.includes('seed')) bits.push({ t: '不可复现' });
+  else if (e.own.seed) bits.push({ t: c.seedMode === 'random' ? '随机种子' : `种子 ${c.seed}`, ov: 1 });
+  if (!bits.some(x => x.ov || x.warn) && !m.caps.design) bits.unshift({ t: '统一设置' });
   const est = estimateNum(r);
   const state = !usable(m) ? `<span class="err">${m.provider === 'local' ? '模型还没下载' : `${esc(PV(m.provider)?.name || '')} 还没连接`}</span>`
     : res?.busy ? '<span class="note">生成中…</span>'
+    : res?.queued ? '<span class="note">排队中…</span>'
     : res?.err ? `<span class="err" title="${esc(res.err)}">生成失败：${esc(res.err)}</span>`
     : res?.rec ? `<canvas class="wave" data-url="/clips/${res.rec.id}.wav" data-id="${res.rec.id}" data-c="${c.id}"></canvas><span class="cr-meta">${res.rec.dur.toFixed(1)}s${res.rec.cost?.amount != null ? ` · ${money(res.rec.cost.amount, res.rec.cost.currency)}` : ''}</span>`
-    : `<span class="note">${S.text.trim() ? `点播放生成${est ? est.token ? ' · 按 token 计费' : ` · 约 ${money(est.v, est.cur)}` : ' · 本地免费'}` : '先输入文本'}</span>`;
-  return `<div class="cand ${open ? 'open' : ''} ${S.cmpPick === c.id ? 'pick' : ''}" style="--m:${hue(m.id)}">
+    : `<span class="note">${S.text.trim() ? `点播放生成${est ? est.token ? ' · 按 token 计费' : ` · 约 ${money(est.v, est.cur)}` : m.provider === 'local' ? ' · 本地免费' : ''}` : '先输入文本'}</span>`;
+  return `<div class="cand ${open ? 'open' : ''} ${c.of ? 'var' : ''} ${S.cmpPick === c.id ? 'pick' : ''}" style="--m:${hue(m.id)}">
     <div class="cr">
-      <span class="cr-l">${LETTER(i)}</span>
-      <button class="pb ${res?.busy ? 'busy' : ''}" type="button" data-cplay="${c.id}" ${res?.rec ? `data-url="/clips/${res.rec.id}.wav"` : ''} ${ok && !res?.busy ? '' : 'disabled'} aria-label="${res?.rec ? '播放' : '生成并播放'} ${LETTER(i)}">${res?.busy ? '' : ic('play', 14)}</button>
-      <button class="cr-who" type="button" data-cedit="${c.id}" aria-expanded="${open}"><b>${esc(candLabel(c))}</b><span>${m.provider === 'local' ? '<i class="dot"></i>' : pIcon(m.provider, 13)}<em title="${esc(m.name)}">${esc(m.name)}</em></span></button>
-      <button class="cr-diff" type="button" data-cedit="${c.id}" aria-label="编辑候选 ${LETTER(i)}">${bits.map(b => `<span>${esc(b)}</span>`).join('')}${ic('edit', 13)}</button>
+      <span class="cr-l">${tag}</span>
+      <button class="pb ${res?.busy ? 'busy' : ''}" type="button" data-cplay="${c.id}" ${ok && !res?.busy ? '' : 'disabled'} aria-label="${res?.rec ? '播放' : res?.queued ? '优先生成并播放' : '生成并播放'} ${tag}">${res?.busy ? '' : ic('play', 14)}</button>
+      <button class="cr-who" type="button" data-cedit="${c.id}" aria-expanded="${open}"><b>${esc(candLabel(c))}${c.of ? `<i class="vtag">${tags[c.of]} 的变体</i>` : ''}</b><span>${m.provider === 'local' ? '<i class="dot"></i>' : pIcon(m.provider, 13)}<em title="${esc(m.name)}">${esc(m.name)}</em></span></button>
+      <button class="cr-diff" type="button" data-cedit="${c.id}" aria-label="编辑候选 ${tag}">${bits.map(x => `<span class="${x.ov ? 'ov' : x.warn ? 'warn' : ''}">${esc(x.t)}</span>`).join('')}${ic('edit', 13)}</button>
       <div class="cr-res">${state}</div>
       <div class="cr-a">
+        <button class="btn ghost sm" type="button" data-cvar="${c.id}" title="基于这个候选做变体：单独调语气、语速或种子，和原来的并排比较">${ic('dup', 14)}变体</button>
         <button class="btn ghost sm fav ${S.cmpPick === c.id ? 'on' : ''}" type="button" data-cpick="${c.id}" aria-pressed="${S.cmpPick === c.id}" title="选中这个候选">${ic('star', 14)}${S.cmpPick === c.id ? '已选' : '选它'}</button>
-        <button class="btn ghost sm" type="button" data-cdel="${c.id}" ${S.cands.length < 2 ? 'disabled' : ''} title="移除这个候选" aria-label="移除候选 ${LETTER(i)}">${ic('x', 14)}</button>
+        <button class="btn ghost sm" type="button" data-cdel="${c.id}" ${S.cands.length < 2 ? 'disabled' : ''} title="移除这个候选" aria-label="移除候选 ${tag}">${ic('x', 14)}</button>
       </div>
     </div>
     ${open ? candEditor(c) : ''}
   </div>`;
 }
 function candEditor(c) {
-  const m = M(c.model), has = k => m.params.includes(k), c2 = m.caps;
+  const m = M(c.model), e = eff(c), has = k => m.params.includes(k), c2 = m.caps, base = S.cmpBase;
   const vs = S.voices.filter(v => v.model === m.id && v.kind === 'preset'), ex = m.instr_examples || (c2.design ? S.cat.design : S.cat.instructions);
+  const back = f => `<button type="button" class="linkbtn" data-back="${f}" title="删掉这个候选单独的设置，改回跟随统一设置">恢复统一</button>`;
+  const follow = '<span class="follow">跟随统一</span>';
+  const insVal = c2.design ? c.instructions || '' : c.instructions ?? '';
   return `<div class="ced" data-ced="${c.id}">
     <div class="field"><div class="lbl"><span>模型</span><span class="key">model</span></div>
       <select class="in" data-f="model">${[...new Set(mine().map(x => x.provider))].map(pid => `<optgroup label="${pid === 'local' ? '本地' : esc(PV(pid)?.name || pid)}">${mine().filter(x => x.provider === pid).map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
     ${has('voice') ? `<div class="field"><div class="lbl"><span>音色</span><span class="key">voice</span></div>
       <div class="vrow"><select class="in" data-f="voice">${vs.map(v => `<option value="${esc(v.voice)}" ${v.voice === c.voice ? 'selected' : ''}>${esc(v.name)}${v.gender ? ` · ${v.gender}` : ''}${v.lang && v.lang !== '中文' ? ` · ${esc(v.lang)}` : ''}</option>`).join('')}</select>
-      <button class="pb" type="button" data-sample="${esc(short(m))}:${esc(c.voice)}" data-url="${esc(vs.find(v => v.voice === c.voice)?.sample.url || '')}" title="试听音色样本" aria-label="试听音色样本">${ic('play', 13)}</button></div></div>` : ''}
-    ${has('instructions') ? `<div class="field wide"><div class="lbl"><span>${c2.design ? '声音描述' : '情绪 / 语气'}</span><span class="key">instructions</span></div>
-      <input class="in" data-f="instructions" value="${esc(c.instructions)}" placeholder="${c2.design ? '例如：三十岁左右的男声，温和真诚' : m.instr_enum ? '只能选下面的情绪之一' : '留空为自然语气'}">
-      <div class="chips">${ex.slice(0, 8).map(t => `<button type="button" class="chip ${t === c.instructions ? 'on' : ''}" data-ex="${esc(t)}">${esc(t.length > 12 ? t.slice(0, 12) + '…' : t)}</button>`).join('')}</div></div>` : ''}
-    <div class="field"><div class="lbl"><span>语速 <span class="val">${Number(c.speed).toFixed(2)}×</span></span><span class="key">speed</span></div>
-      <input type="range" data-f="speed" min="0.5" max="2" step="0.05" value="${c.speed}" aria-label="语速"></div>
+      <button class="pb" type="button" data-sample="${esc(short(m))}:${esc(c.voice)}" data-url="${esc(vs.find(v => v.voice === c.voice)?.sample.url || '')}" title="试听音色样本" aria-label="试听音色样本">${ic('play', 13)}</button></div></div>` : '<div></div>'}
+    ${has('instructions') ? `<div class="field wide"><div class="lbl"><span>${c2.design ? '声音描述' : '情绪 / 语气'} ${c2.design ? '' : e.own.instructions ? back('instructions') : follow}</span><span class="key">instructions</span></div>
+      <input class="in" data-f="instructions" value="${esc(insVal)}" placeholder="${c2.design ? '例如：三十岁左右的男声，温和真诚' : `跟随统一设置：${base.instructions || '自然语气'}${m.instr_enum ? '（只能选下面的情绪之一）' : ''}`}">
+      <div class="chips">${ex.slice(0, 8).map(t => `<button type="button" class="chip ${e.own.instructions || c2.design ? t === e.instructions ? 'on' : '' : ''}" data-ex="${esc(t)}">${esc(t.length > 12 ? t.slice(0, 12) + '…' : t)}</button>`).join('')}</div></div>` : ''}
+    <div class="field"><div class="lbl"><span>语速 <span class="val">${Number(e.speed).toFixed(2)}×</span> ${e.own.speed ? back('speed') : follow}</span><span class="key">speed</span></div>
+      <input type="range" data-f="speed" min="0.5" max="2" step="0.05" value="${e.speed}" aria-label="语速"></div>
     ${has('seed') ? `<div class="field"><div class="lbl"><span>种子</span><span class="key">seed</span></div>
       <div class="seedrow"><div class="seg">${[['shared', '统一'], ['fixed', '固定'], ['random', '随机']].map(([k, t]) => `<button type="button" data-sm="${k}" class="${c.seedMode === k ? 'on' : ''}">${t}</button>`).join('')}</div>
       ${c.seedMode === 'fixed' ? `<input class="in mono" type="number" data-f="seed" value="${c.seed}" min="0" aria-label="种子">` : ''}</div></div>` : ''}
-    <div class="ced-a"><button class="btn sm" type="button" data-apply="${c.id}" title="把这个候选的语气和语速用到所有候选上">应用语气和语速到全部</button><span class="sp"></span><button class="btn sm" type="button" data-cdone>收起</button></div>
+    <div class="ced-a">${!c2.design && (e.own.instructions || e.own.speed) ? `<button class="btn sm" type="button" data-promote="${c.id}" title="把这个候选的语气和语速设为统一设置，所有候选都改用它">设为统一设置</button>` : ''}<span class="sp"></span><button class="btn sm" type="button" data-cdone>收起</button></div>
   </div>`;
 }
 function bindCands(main) {
   const list = $('#clist', main), find = id => S.cands.find(c => c.id === id), redraw = () => { saveCands(); renderCands(main); };
   $$('[data-cedit]', list).forEach(b => b.onclick = () => { S.cmpOpen = S.cmpOpen === b.dataset.cedit ? null : b.dataset.cedit; renderCands(main); });
   $$('[data-cdone]', list).forEach(b => b.onclick = () => { S.cmpOpen = null; renderCands(main); });
-  $$('[data-cdel]', list).forEach(b => b.onclick = () => { S.cands = S.cands.filter(c => c.id !== b.dataset.cdel); if (S.cmpPick === b.dataset.cdel) S.cmpPick = null; redraw(); });
+  $$('[data-cdel]', list).forEach(b => b.onclick = () => {
+    const id = b.dataset.cdel; S.cands = S.cands.filter(c => c.id !== id);
+    S.cands.forEach(c => { if (c.of === id) delete c.of; });   // 原候选删了，它的变体各自成为独立候选
+    if (S.cmpPick === id) S.cmpPick = null; redraw();
+  });
+  $$('[data-cvar]', list).forEach(b => b.onclick = () => {
+    const c = find(b.dataset.cvar), root = c.of || c.id, v = { ...c, id: cid(), of: root };
+    let at = S.cands.findIndex(x => x.id === root); while (S.cands[at + 1]?.of === root) at++;
+    S.cands.splice(at + 1, 0, v); S.cmpOpen = v.id; redraw();
+    const inp = $(`[data-ced="${v.id}"] [data-f="instructions"]`, main); inp?.focus();
+    $(`[data-ced="${v.id}"]`, main)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
   $$('[data-cpick]', list).forEach(b => b.onclick = () => { S.cmpPick = S.cmpPick === b.dataset.cpick ? null : b.dataset.cpick; redraw(); });
   $$('[data-cplay]', list).forEach(b => b.onclick = () => playCand(main, find(b.dataset.cplay)));
   $$('canvas.wave', list).forEach(cv => cv.onclick = e => { const r = cv.getBoundingClientRect(), c = find(cv.dataset.c); play(cv.dataset.url, candMeta(c), (e.clientX - r.left) / r.width); });
   $$('[data-sample]', list).forEach(b => b.onclick = () => playSample(b.dataset.sample, b));
   $$('[data-ced]', list).forEach(ed => {
-    const c = find(ed.dataset.ced);
+    const c = find(ed.dataset.ced), design = M(c.model).caps.design;
     $$('[data-f]', ed).forEach(inp => {
       const f = inp.dataset.f;
-      if (f === 'model') return inp.onchange = () => { Object.assign(c, newSlot({ model: inp.value, instructions: c.instructions, speed: c.speed }), { id: c.id, seedMode: c.seedMode === 'random' ? 'random' : 'shared' }); redraw(); };
+      if (f === 'model') return inp.onchange = () => {
+        const n = newCand({ model: inp.value, instructions: M(inp.value).caps.design ? '' : undefined });
+        Object.assign(c, n, { id: c.id, of: c.of, speed: c.speed, seedMode: c.seedMode, seed: c.seed, instructions: M(inp.value).caps.design ? '' : design ? null : c.instructions });
+        if (!c.of) delete c.of; redraw();
+      };
       if (f === 'voice') return inp.onchange = () => { c.voice = inp.value; redraw(); };
       if (inp.type === 'range') {
         inp.oninput = () => { $('.val', inp.closest('.field')).textContent = `${(+inp.value).toFixed(2)}×`; };
-        return inp.onchange = () => { c.speed = +inp.value; saveCands(); refreshRows(main); };
+        return inp.onchange = () => { c.speed = +inp.value === S.cmpBase.speed ? null : +inp.value; redraw(); };
       }
-      // 文本（语气、固定种子）：只改状态和这一行的摘要，不重建正在输入的框
+      // 文本（语气、固定种子）：只改状态和这一行的摘要，不重建正在输入的框；语气清空 = 跟随统一设置
       onText(inp, () => {
-        c[f] = f === 'seed' ? +inp.value : inp.value;
+        if (f === 'seed') c.seed = +inp.value;
+        else { const v = inp.value.trim(); c.instructions = design ? v : v || null; }
         if (f === 'instructions') $$('[data-ex]', ed).forEach(b => b.classList.toggle('on', b.dataset.ex === c.instructions));
         saveCands(); refreshRows(main);
       }, 250);
     });
-    $$('[data-ex]', ed).forEach(b => b.onclick = () => { c.instructions = c.instructions === b.dataset.ex ? '' : b.dataset.ex; redraw(); });
+    $$('[data-ex]', ed).forEach(b => b.onclick = () => { c.instructions = c.instructions === b.dataset.ex ? design ? '' : null : b.dataset.ex; redraw(); });
     $$('[data-sm]', ed).forEach(b => b.onclick = () => { c.seedMode = b.dataset.sm; redraw(); });
-    $$('[data-apply]', ed).forEach(b => b.onclick = () => {
-      S.cands.forEach(x => { if (x === c) return; if (M(x.model).params.includes('instructions')) x.instructions = c.instructions; x.speed = c.speed; });
-      toast(`已把${c.instructions ? `「${c.instructions}」和 ` : '自然语气和 '}${c.speed}× 语速用到全部候选`); redraw();
+    $$('[data-back]', ed).forEach(b => b.onclick = () => { c[b.dataset.back] = null; redraw(); });
+    $$('[data-promote]', ed).forEach(b => b.onclick = () => {
+      const e = eff(c); S.cmpBase = { instructions: e.instructions, speed: e.speed };
+      S.cands.forEach(x => {   // 和新统一设置相同的覆盖没有意义了，一并清掉
+        if (x.instructions != null && !M(x.model).caps.design && x.instructions === S.cmpBase.instructions) x.instructions = null;
+        if (x.speed === S.cmpBase.speed) x.speed = null;
+      });
+      toast(`统一设置改为${e.instructions ? `「${e.instructions}」、` : '自然语气、'}${Number(e.speed).toFixed(2)}×`); saveCands(); pageCompare(main);
     });
   });
 }
-const candMeta = c => { const r = candReq(c); return { title: `${LETTER(S.cands.indexOf(c))} · ${candLabel(c)}`, sub: `${M(c.model).name}${r.instructions ? ` · ${r.instructions}` : ''}`, color: hue(c.model) }; };
-async function genCand(main, c) {
-  const r = candReq(c), k = rkey(r);
-  if (S.cmpRes[k]?.rec || S.cmpRes[k]?.busy) return S.cmpRes[k];
-  S.cmpRes[k] = { busy: true }; renderCands(main);
-  try { const rec = await api('/api/speech', { ...r, source: 'webui' }); S.cmpRes[k] = { rec: { id: rec.id, dur: rec.dur, cost: rec.cost, request: rec.request } }; S.hist = [rec, ...S.hist.filter(h => h.id !== rec.id)]; }
-  catch (e) { S.cmpRes[k] = { err: e.message }; }
-  saveCands(); if (S.route === 'playground' && S.compare) renderCands(main);
-  if (M(c.model).status !== 'loaded' && M(c.model).provider === 'local') { refreshModels(); refreshStatus(); }
-  return S.cmpRes[k];
-}
-async function playCand(main, c) {
-  const res = candRes(c);
-  if (res?.rec) return play(`/clips/${res.rec.id}.wav`, candMeta(c));
-  const m = M(c.model); if (m.provider === 'local' && m.status !== 'loaded') toast(`第一次用 ${m.name}，要先加载模型（十几秒）`, 4000);
-  const out = await genCand(main, c);
-  if (out?.rec && S.route === 'playground' && S.compare) play(`/clips/${out.rec.id}.wav`, candMeta(c));
-  else if (out?.err) toast(`生成失败：${out.err}`, 5000);
-}
-async function genAll(main) {
-  const todo = S.cands.filter(c => usable(M(c.model)) && !candRes(c)?.rec);
-  for (const c of todo) { if (!(S.route === 'playground' && S.compare)) break; await genCand(main, c); }
-}
+const candMeta = c => { const r = candReq(c); return { title: `${candTags()[c.id]} · ${candLabel(c)}`, sub: `${M(c.model).name}${r.instructions ? ` · ${r.instructions}` : ''}`, color: hue(c.model) }; };
 function renderPicker(main) {
   const el = $('#picker', main); if (!el) return;
   if (!S.cmpPicker) { el.innerHTML = ''; return; }
@@ -660,7 +783,7 @@ function renderPicker(main) {
   const ms = [...new Set(vs.map(v => v.model))];
   el.innerHTML = `<div class="vpick">
     <div class="vpick-h"><label class="search">${ic('search', 15)}<input class="in" id="vpq" placeholder="搜索音色名字、描述、语言" value="${esc(S.cmpQ)}" aria-label="搜索音色"></label>
-      <span class="note">勾选后添加；语气、语速沿用最后一个候选</span><span class="sp"></span>
+      <span class="note">勾选后添加，都用统一设置</span><span class="sp"></span>
       <button class="btn primary sm" type="button" id="vpAdd" disabled>添加</button><button class="btn ghost sm" type="button" id="vpClose">取消</button></div>
     <div class="vpick-l">${ms.map(mid => `<div class="vpick-g"><div class="vpick-gh">${M(mid).provider === 'local' ? `<i class="dot" style="--m:${hue(mid)}"></i>` : pIcon(M(mid).provider, 13)}${esc(M(mid).name)}</div>
       ${(() => { const all = vs.filter(v => v.model === mid); return all.slice(0, 60).map(v => `<label class="vpick-i ${have.has(`${v.model}|${v.voice}`) ? 'has' : ''}"><input type="checkbox" value="${esc(v.ref)}" ${have.has(`${v.model}|${v.voice}`) ? 'disabled checked' : ''}><span><b>${esc(v.name)}</b>${[v.gender && v.gender + '声', v.lang].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') + (all.length > 60 ? `<span class="note vpick-more">还有 ${all.length - 60} 个，搜索查看</span>` : ''); })()}</div>`).join('') || '<p class="sec-empty">没有匹配的音色。</p>'}</div></div>`;
@@ -669,17 +792,15 @@ function renderPicker(main) {
   boxes.forEach(b => b.onchange = () => { const n = boxes.filter(x => x.checked).length; add.disabled = !n; add.textContent = n ? `添加 ${n} 个` : '添加'; });
   $('#vpClose', el).onclick = () => { S.cmpPicker = false; renderPicker(main); };
   add.onclick = () => {
-    const last = S.cands[S.cands.length - 1];
-    boxes.filter(b => b.checked).forEach(b => { const v = S.voices.find(x => x.ref === b.value), m = M(v.model);
-      S.cands.push({ ...newSlot({ model: v.model, voice: v.voice }), id: cid(), seedMode: 'shared', speed: last?.speed ?? 1, instructions: m.params.includes('instructions') ? last?.instructions || '' : '' }); });
+    boxes.filter(b => b.checked).forEach(b => { const v = S.voices.find(x => x.ref === b.value); S.cands.push(newCand({ model: v.model, voice: v.voice })); });
     S.cmpPicker = false; S.cmpQ = ''; saveCands(); pageCompare(main);
   };
 }
 function renderPickbar(main) {
   const el = $('#pickbar', main), c = S.cands.find(x => x.id === S.cmpPick); if (!el) return;
   if (!c) { el.innerHTML = ''; return; }
-  const r = candReq(c), i = S.cands.indexOf(c);
-  el.innerHTML = `<div class="pickbar" style="--m:${hue(c.model)}">${ic('star', 16)}<div><b>选了 ${LETTER(i)} · ${esc(candLabel(c))}</b><span>${esc(M(c.model).name)}${r.instructions ? ` ·「${esc(r.instructions)}」` : ''}${r.speed ? ` · ${r.speed}×` : ''}${r.seed != null ? ` · 种子 ${r.seed}` : ''}</span></div><span class="sp"></span>
+  const r = candReq(c);
+  el.innerHTML = `<div class="pickbar" style="--m:${hue(c.model)}">${ic('star', 16)}<div><b>选了 ${candTags()[c.id]} · ${esc(candLabel(c))}</b><span>${esc(M(c.model).name)}${r.instructions ? ` ·「${esc(r.instructions)}」` : ''}${r.speed ? ` · ${r.speed}×` : ''}${r.seed != null ? ` · 种子 ${r.seed}` : ''}</span></div><span class="sp"></span>
     <button class="btn sm" type="button" id="pkCmd">${ic('copy', 14)}复制命令</button><button class="btn sm" type="button" id="pkSave">存为我的音色</button><button class="btn primary sm" type="button" id="pkSingle">在单路里继续调${ic('arrow', 13)}</button></div>`;
   $('#pkCmd', el).onclick = () => copy(cmdOf(r, 'cli'), '已复制 CLI 命令');
   $('#pkSave', el).onclick = () => saveMyVoice({ ...r }, M(r.model));

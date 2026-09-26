@@ -16,7 +16,7 @@ English · [中文](README.zh-CN.md)
 - **Local models, offline.** Qwen3-TTS (CustomVoice and VoiceDesign, every size and quantization published by `mlx-community`) and Kokoro-82M (Chinese). Downloads are verified file by file against HuggingFace hashes.
 - **Cloud providers, same interface.** OpenRouter plus ten providers (list below). Per-provider quirks — where the emotion prompt goes, speed ranges, base64/hex/URL/chunked audio — are handled by adapters so you don't have to.
 - **Custom providers.** Plug in any OpenAI-compatible speech service: a self-hosted Kokoro-FastAPI, a proxy, a vendor vox doesn't know yet, or another vox.
-- **Hear before you choose.** A voice library where every voice reads the same sample line; a playground with a compare mode (one text, a list of candidates that differ in voice, model or tone; generated on demand, with a cost estimate first).
+- **Hear before you choose.** A voice library where every voice reads the same sample line; a playground with a compare mode: one text, one shared set of tone / speed / seed, and a list of voices or models generated side by side in one click (cost estimate first). Want to tweak one of them? Make a variant of it and compare the two.
 
 | Voice library | Models and providers |
 | --- | --- |
