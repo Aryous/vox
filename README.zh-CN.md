@@ -43,7 +43,7 @@ vox serve --open            # 网页界面：http://127.0.0.1:8765
 ```bash
 git clone https://github.com/Aryous/vox && cd vox
 uv venv --python 3.12 && uv pip install -e .
-.venv/bin/python tests/test_providers.py     # 36 项离线测试，约 1 秒
+.venv/bin/python tests/test_providers.py     # 39 项离线测试，约 1 秒
 ```
 
 ## 快速上手
