@@ -567,6 +567,26 @@ class GatewayTest(unittest.TestCase):
         self.assertAlmostEqual(hub.estimate({"model": "siliconflow/cosyvoice2", "input": "你好"})["amount"], 50 * 6 / 1_000_000)
 
 
+class GeminiVoiceListTest(unittest.TestCase):
+    def test_paginates_and_keeps_standard_voices(self):
+        m = catalog.find_model("gemini/gemini-3.8-flash-tts")
+        fake = Fake({"voices": [{"id": "achernar", "gender": "female", "language_code": "multi"}, {"id": "en-us-host-1", "display_name": "Host 1", "language_code": "en-US"}], "next_page_token": "p/2"},
+                    {"voices": [{"id": "zephyr"}, {"id": "cmn-cn-narrator-3", "display_name": "旁白 3", "gender": "male", "language_code": "cmn-CN"}]})
+        old, gemini.http = gemini.http, fake
+        try:
+            vs = engine_for(m).fetch_voices()
+        finally:
+            gemini.http = old
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIn("page_size=1000", fake.calls[0]["url"]); self.assertIn("page_token=p%2F2", fake.calls[1]["url"])
+        ids = [v["voice"] for v in vs]
+        std = [v["voice"] for v in engine_for(m).static_voices()]
+        self.assertEqual(ids[:len(std)], std)                       # 标准音色在前、带注册表里的说明
+        self.assertNotIn("achernar", ids); self.assertNotIn("zephyr", ids)   # 大小写不同的同名音色不重复
+        self.assertIn("cmn-cn-narrator-3", ids)                      # 第二页（中文）也拿到了
+        self.assertEqual(next(v for v in vs if v["voice"] == "cmn-cn-narrator-3")["gender"], "男")
+
+
 class CacheTest(unittest.TestCase):
     """同样的请求命中缓存；cache=False 重新合成。不支持种子的模型得到新的一条，旧的保留。"""
 
