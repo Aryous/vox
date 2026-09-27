@@ -7,7 +7,7 @@ English · [中文](README.zh-CN.md)
 
 > **Preview (0.1).** Works day-to-day on the author's Mac, but expect rough edges. The web UI and CLI messages are currently **Chinese only**; an English UI is planned. Local models need **macOS on Apple Silicon**.
 
-![Compare mode: one line of text, several voices side by side](docs/images/compare.png)
+![Compare mode: one text, one shared set of settings, several voices side by side, plus a variant of A with its own tone](docs/images/compare.png)
 
 ## What it does
 

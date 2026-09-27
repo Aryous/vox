@@ -497,7 +497,7 @@ function ensureCands() {
   S.cands = (S.cands || []).filter(c => M(c.model));
   if (!S.cmpBase) {
     // 旧版每个候选各存一整套参数：取第一个候选的语气和语速作统一设置，其他候选只保留和它不同的部分
-    const tone = c => !M(c.model).caps.design && M(c.model).params.includes('instructions'), f = S.cands.find(tone) || S.cands[0] || {};
+    const tone = c => !!M(c.model) && !M(c.model).caps.design && M(c.model).params.includes('instructions'), f = S.cands.find(tone) || S.cands[0] || {};
     S.cmpBase = { instructions: tone(f) ? f.instructions || '' : '', speed: f.speed ?? 1 };
     S.cands.forEach(c => {
       if (!M(c.model).caps.design && (!tone(c) || (c.instructions || '') === S.cmpBase.instructions)) c.instructions = null;
