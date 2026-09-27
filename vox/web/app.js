@@ -441,10 +441,19 @@ function renderFeed(main) {
     if (act === 'reuse') { Object.assign(slot(), newSlot(rec.request)); if (rec.request.seed != null) slot().seedMode = 'fixed'; S.text = rec.request.input; store.set('text', S.text); saveSlots(); pagePlayground(main); toast('已套用这条的全部参数（含种子）'); scrollTo({ top: 0, behavior: 'smooth' }); }
     if (act === 'save') saveMyVoice({ ...rec.request }, M(rec.request.model));
     if (act === 'cmd') copy(cmdOf(rec.request, 'cli'), '已复制 CLI 命令');
+    if (act === 'again') again(rec, main);
   };
   feed.ondblclick = null;
   $$('canvas.wave', feed).forEach(cv => cv.onclick = e => { const r = cv.getBoundingClientRect(), id = cv.dataset.id, rec = S.hist.find(h => h.id === id);
     play(cv.dataset.url, { title: rec?.request.input.slice(0, 40) || '', sub: rec ? short(M(rec.request.model)) : '', color: rec ? hue(rec.request.model) : '' }, (e.clientX - r.left) / r.width); });
+}
+// 不支持种子的模型：同样的参数再来一条（跳过缓存，新的一条单独保存；云端会再次计费）
+async function again(rec, main) {
+  const run = { id: Date.now(), text: rec.request.input, ts: Date.now(), takes: [{ label: '', req: rec.request, rec: null, pending: '再来一条…' }] };
+  S.runs.unshift(run); renderFeed(main);
+  try { const r = await api('/api/speech', { ...rec.request, cache: false, source: 'webui' }); run.takes[0].rec = r; S.hist = [r, ...S.hist.filter(h => h.id !== r.id)]; }
+  catch (e) { run.takes[0].err = e.message; }
+  renderFeed(main);
 }
 function runHtml(run) {
   const d = new Date(run.ts), time = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -461,6 +470,7 @@ function takeHtml(t) {
     <div class="asr" id="asr-${h.id}">${asrHtml(h)}</div>
     <div class="acts">
       <button class="btn ghost sm fav ${h.star ? 'on' : ''}" type="button" data-act="star" data-id="${h.id}" aria-pressed="${!!h.star}">${ic('star', 14)}${h.star ? '已收藏' : '收藏'}</button>
+      ${m && !m.params.includes('seed') ? `<button class="btn ghost sm" type="button" data-act="again" data-id="${h.id}" title="这个模型不支持种子：同样的参数再生成一条，结果会略有不同${m.provider !== 'local' ? '（会再次计费）' : ''}">${ic('refresh', 14)}再来一条</button>` : ''}
       <button class="btn ghost sm" type="button" data-act="reuse" data-id="${h.id}">用这套参数</button>
       <button class="btn ghost sm" type="button" data-act="save" data-id="${h.id}">存为我的音色</button>
       ${h.asr ? '' : `<button class="btn ghost sm" type="button" data-act="asr" data-id="${h.id}">读音校对</button>`}

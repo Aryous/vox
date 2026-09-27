@@ -43,7 +43,7 @@ For development:
 ```bash
 git clone https://github.com/Aryous/vox && cd vox
 uv venv --python 3.12 && uv pip install -e .
-.venv/bin/python tests/test_providers.py     # 36 offline tests, ~1 s
+.venv/bin/python tests/test_providers.py     # 39 offline tests, ~1 s
 ```
 
 ## Quick start
@@ -72,7 +72,7 @@ with client.audio.speech.with_streaming_response.create(
     r.stream_to_file("hello.mp3")
 ```
 
-Responses carry `X-Vox-Id`, `X-Vox-Seed` and `X-Vox-Duration` headers. The native JSON API (`/api/models`, `/api/voices`, `/api/speech`, …) is listed on the web UI's API page and in `GET /llms.txt`.
+Identical requests return the cached take; pass `cache: false` (CLI `--no-cache`) to synthesize again — useful for cloud models that have no seed. Responses carry `X-Vox-Id`, `X-Vox-Seed` and `X-Vox-Duration` headers. The native JSON API (`/api/models`, `/api/voices`, `/api/speech`, …) is listed on the web UI's API page and in `GET /llms.txt`.
 
 ## Models and providers
 

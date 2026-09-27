@@ -50,6 +50,7 @@ MY_VOICES = HOME / "my_voices.json"
 SETTINGS = HOME / "settings.json"
 MY_MODELS = HOME / "models.json"
 CUSTOM_PROVIDERS = HOME / "providers.json"
+SERVER_FILE = HOME / "server.json"   # 运行中的服务地址和进程号；服务退出时删除。CLI 靠它找到「用同一份数据」的服务
 
 # 缓存
 DISCOVERED = CACHE / "discovered"

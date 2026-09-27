@@ -30,7 +30,26 @@ import time
 import urllib.request
 from pathlib import Path
 
-SERVER = os.environ.get("VOX_URL", "http://127.0.0.1:8765").rstrip("/")
+from . import paths
+
+
+def _find_server():
+    """VOX_URL 明确指定的服务直接用；否则看当前数据目录的 server.json（服务启动时写、退出时删），最后才试默认端口。"""
+    if os.environ.get("VOX_URL"):
+        return os.environ["VOX_URL"].rstrip("/"), True
+    try:
+        info = json.loads(paths.SERVER_FILE.read_text())
+        os.kill(info["pid"], 0)
+        return info["url"].rstrip("/"), False
+    except ProcessLookupError:
+        paths.SERVER_FILE.unlink(missing_ok=True)   # 服务没正常退出留下的
+    except (OSError, ValueError, KeyError):
+        pass
+    return "http://127.0.0.1:8765", False
+
+
+SERVER, _EXPLICIT = _find_server()
+_SAME_HOME = None   # 第一次调用服务时核对：服务用的数据目录必须和本进程一致，否则改的是别人的数据
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
 
 
@@ -48,7 +67,12 @@ def _out(a, data, human):
 
 def _server(path, body=None, timeout=600):
     """调用正在运行的 vox 服务；没在运行返回 None。"""
+    global _SAME_HOME
     if os.environ.get("VOX_NO_SERVER"):
+        return None
+    if _SAME_HOME is None:
+        _SAME_HOME = _EXPLICIT or _check_home()
+    if not _SAME_HOME:
         return None
     try:
         req = urllib.request.Request(SERVER + path, data=None if body is None else json.dumps(body).encode(),
@@ -60,6 +84,19 @@ def _server(path, body=None, timeout=600):
         raise SystemExit(f"✗ {msg}")
     except (urllib.error.URLError, ConnectionError, TimeoutError):
         return None
+
+
+def _check_home():
+    try:
+        with urllib.request.urlopen(SERVER + "/api/status", timeout=3) as r:
+            home = json.loads(r.read()).get("home")
+    except (urllib.error.URLError, ConnectionError, TimeoutError, ValueError):
+        return False   # 没有服务在跑
+    if home and Path(home).expanduser().resolve() == paths.HOME.resolve():
+        return True
+    _log(f"注意：{SERVER} 上的 vox 服务用的是另一个数据目录（{home}），本次不经过它，直接在本进程里处理（{paths.HOME}）。"
+         "确实要用那个服务，请设置 VOX_URL。")
+    return False
 
 
 def _hub():
@@ -156,7 +193,7 @@ def _request(a):
 
 def cmd_say(a):
     text = sys.stdin.read().strip() if a.text == "-" else a.text
-    req = {**_request(a), "input": text}
+    req = {**_request(a), "input": text, **({"cache": False} if a.no_cache else {})}
     t = time.time()
     rec = None if a.local else _server("/api/speech", {**req, "source": "cli"})
     hub = _hub()
@@ -398,6 +435,7 @@ def main(argv=None):
     s.add_argument("-i", "--instructions", dest="instructions", help="情绪 / 语气；声音设计模型里是声音描述")
     s.add_argument("-s", "--speed", type=float, help="语速 0.25–4")
     s.add_argument("--seed", type=int, help="随机种子（Qwen3 可复现）；不填则随机并记录")
+    s.add_argument("--no-cache", action="store_true", help="不用缓存，重新合成（不支持种子的云端模型用它再来一条）")
     s.add_argument("-l", "--lang", help="语言，如 chinese、english、auto")
     for k, t in (("temperature", float), ("top_p", float), ("top_k", int), ("repetition_penalty", float)):
         s.add_argument("--" + k.replace("_", "-"), dest=k, type=t)

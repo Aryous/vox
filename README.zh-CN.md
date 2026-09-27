@@ -72,7 +72,7 @@ with client.audio.speech.with_streaming_response.create(
     r.stream_to_file("hi.mp3")
 ```
 
-响应头带 `X-Vox-Id`、`X-Vox-Seed`、`X-Vox-Duration`。原生 JSON 接口（`/api/models`、`/api/voices`、`/api/speech`……）见网页的 API 页或 `GET /llms.txt`。
+同样的请求默认直接返回上次的结果；传 `cache: false`（CLI 用 `--no-cache`）会重新合成，适合没有种子的云端模型再来一条。响应头带 `X-Vox-Id`、`X-Vox-Seed`、`X-Vox-Duration`。原生 JSON 接口（`/api/models`、`/api/voices`、`/api/speech`……）见网页的 API 页或 `GET /llms.txt`。
 
 ## 模型与 Provider
 

@@ -8,14 +8,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
+import sys
 import traceback
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import audio, catalog, hub
+from . import audio, catalog, hub, paths
 
 WEB = Path(__file__).parent / "web"
 
@@ -33,7 +36,7 @@ def llms_txt(base: str) -> str:
 ## 合成（OpenAI 兼容）
 POST {base}v1/audio/speech
 {{"model": "local/qwen3", "input": "你好", "voice": "serena", "instructions": "轻快友好", "speed": 1.0, "response_format": "mp3"}}
-扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty。voice 也可写音色引用，如 "qwen3:serena" 或 "my:<id>"。
+扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用，如 "qwen3:serena" 或 "my:<id>"。
 返回音频字节；响应头 X-Vox-Id、X-Vox-Seed、X-Vox-Duration。
 
 ## 原生 API（JSON）
@@ -209,13 +212,32 @@ class Handler(SimpleHTTPRequestHandler):
         self._file(f, audio.FORMATS[fmt], {"X-Vox-Id": rec["id"], "X-Vox-Seed": rec["request"].get("seed", ""), "X-Vox-Duration": rec["dur"]}, cache=False)
 
 
+def _announce(host, port):
+    """把地址写进数据目录的 server.json：同一份数据的 CLI 据此找到这个服务，数据目录不同的就找不到它。"""
+    reach = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    paths.HOME.mkdir(parents=True, exist_ok=True)
+    paths.SERVER_FILE.write_text(json.dumps({"url": f"http://{reach}:{port}", "pid": os.getpid(), "home": str(paths.HOME)}))
+
+
+def _retract():
+    try:
+        if json.loads(paths.SERVER_FILE.read_text()).get("pid") == os.getpid():
+            paths.SERVER_FILE.unlink()
+    except (OSError, ValueError):
+        pass
+
+
 def serve(host="127.0.0.1", port=8765, open_browser=False):
     srv = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}/"
-    print(f"vox 已启动：{url}\n  WebUI  {url}\n  OpenAI 兼容  {url}v1/audio/speech\n  Agent 说明  {url}llms.txt\n  Ctrl+C 退出", flush=True)
+    _announce(host, port)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # kill 时也走 finally，清掉 server.json
+    print(f"vox 已启动：{url}\n  WebUI  {url}\n  OpenAI 兼容  {url}v1/audio/speech\n  Agent 说明  {url}llms.txt\n  数据  {paths.HOME}\n  Ctrl+C 退出", flush=True)
     if open_browser:
         subprocess.Popen(["open", url])
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        _retract()

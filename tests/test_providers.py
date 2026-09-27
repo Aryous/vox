@@ -567,5 +567,57 @@ class GatewayTest(unittest.TestCase):
         self.assertAlmostEqual(hub.estimate({"model": "siliconflow/cosyvoice2", "input": "你好"})["amount"], 50 * 6 / 1_000_000)
 
 
+class CacheTest(unittest.TestCase):
+    """同样的请求命中缓存；cache=False 重新合成。不支持种子的模型得到新的一条，旧的保留。"""
+
+    def setUp(self):
+        self.calls, self._old = [], hub._render
+        def render(req, out):
+            self.calls.append(req); out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(WAV); return 0.3
+        hub._render = render
+
+    def tearDown(self):
+        hub._render = self._old
+
+    def test_seedless_regenerate(self):
+        req = {"model": "openai/gpt-4o-mini-tts", "input": "缓存测试", "voice": "alloy"}
+        a = hub.speak(dict(req)); b = hub.speak(dict(req))
+        self.assertEqual(a["id"], b["id"]); self.assertTrue(b.get("cached")); self.assertEqual(len(self.calls), 1)
+        c = hub.speak({**req, "cache": False})
+        self.assertNotEqual(c["id"], a["id"]); self.assertFalse(c.get("cached")); self.assertEqual(len(self.calls), 2)
+        ids = [h["id"] for h in hub.history()]
+        self.assertIn(a["id"], ids); self.assertIn(c["id"], ids)
+        self.assertNotIn("cache", c["request"])   # 记录下来的请求保持干净
+
+
+class ServerDiscoveryTest(unittest.TestCase):
+    """CLI 只找「用同一份数据」的服务：server.json 由服务写在自己的数据目录里。"""
+
+    def setUp(self):
+        from vox import cli, paths
+        self.cli, self.paths = cli, paths
+        self._url = os.environ.pop("VOX_URL", None)
+
+    def tearDown(self):
+        self.paths.SERVER_FILE.unlink(missing_ok=True)
+        if self._url is not None:
+            os.environ["VOX_URL"] = self._url
+
+    def test_live_and_stale(self):
+        self.paths.SERVER_FILE.write_text(json.dumps({"url": "http://127.0.0.1:9999", "pid": os.getpid()}))
+        self.assertEqual(self.cli._find_server(), ("http://127.0.0.1:9999", False))
+        dead = subprocess.Popen(["true"]); dead.wait()
+        self.paths.SERVER_FILE.write_text(json.dumps({"url": "http://127.0.0.1:9999", "pid": dead.pid}))
+        self.assertEqual(self.cli._find_server(), ("http://127.0.0.1:8765", False))
+        self.assertFalse(self.paths.SERVER_FILE.exists())   # 没正常退出留下的记录被清掉
+
+    def test_explicit_url_wins(self):
+        os.environ["VOX_URL"] = "http://example:1/"
+        try:
+            self.assertEqual(self.cli._find_server(), ("http://example:1", True))
+        finally:
+            del os.environ["VOX_URL"]
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

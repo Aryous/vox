@@ -494,15 +494,21 @@ def clip_path(cid: str) -> Path:
 
 
 def speak(request: dict, source="cli", record=True) -> dict:
-    """合成一条语音。同一请求（含种子）命中缓存直接返回。"""
+    """合成一条语音。同一请求（含种子）命中缓存直接返回。
+    cache=False 时不用缓存、重新合成：不支持种子的模型每次结果都可能不同，于是得到新的一条（新 ID，旧的保留）；
+    支持种子的模型想要不同的结果，换种子即可（不写种子就是随机）。"""
+    fresh = request.get("cache") is False
     req = normalize(request)
     m = catalog.find_model(req["model"])
     if m["caps"].get("seed") and "seed" not in req:
         req["seed"] = int.from_bytes(os.urandom(3), "big") % 1000000  # 记录实际种子，保证可复现
-    cid = hashlib.sha1(json.dumps(req, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    key = json.dumps(req, ensure_ascii=False, sort_keys=True)
+    if fresh and not m["caps"].get("seed"):
+        key += os.urandom(8).hex()
+    cid = hashlib.sha1(key.encode()).hexdigest()[:16]
     out = clip_path(cid)
     hit = next((h for h in history() if h["id"] == cid), None)
-    if hit and out.exists():
+    if hit and out.exists() and not fresh:
         return {**hit, "cached": True, "file": str(out)}
     t = time.time()
     dur = _render(req, out)
