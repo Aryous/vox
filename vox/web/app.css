@@ -480,6 +480,9 @@ details.adv[open]{display:flex;flex-direction:column;gap:12px}
 .tx-open span{font-size:12.5px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag.stt{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--text)}
 .empty-a{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+.tx-dl{display:flex;flex-direction:column;align-items:center;gap:8px}
+.tx-dl .bar{width:min(360px,100%)}
+.tx-dl [data-txprog]{font:13px var(--mono);color:var(--text-2)}
 @media (max-width:720px){
   .tx-opts{grid-template-columns:1fr}
   .tx-row{grid-template-columns:minmax(0,1fr) auto}

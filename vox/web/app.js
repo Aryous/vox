@@ -1149,11 +1149,11 @@ function txModel() {
 }
 
 function pageTranscribe(main) {
-  const ms = mineSTT(), m = txModel();
+  const ready = mineSTT().some(usable);   // 一个能用的都没有（包括还在下载）：显示下载入口或下载进度
   main.innerHTML = `
     <div class="head"><div><h1>转写</h1><p>把录音、视频转成文字或字幕。本地模型在这台 Mac 上识别，文件不离开本机；选云端模型时，文件会发给那家 Provider。</p></div></div>
-    ${m ? '' : txEmpty()}
-    <section class="sec tx-in" ${m ? '' : 'hidden'}>
+    ${ready ? '' : txEmpty()}
+    <section class="sec tx-in" ${ready ? '' : 'hidden'}>
       <label class="drop ${S.tx.file ? 'has' : ''}" id="txDrop">
         <input type="file" id="txFile" accept="audio/*,video/*" hidden>
         <span class="drop-ic">${ic(S.tx.file ? 'wave' : 'upload', 22)}</span>
@@ -1175,6 +1175,9 @@ function pageTranscribe(main) {
   renderTxOpts(main); renderTxOut(main); loadTxList(main);
 }
 function txEmpty() {
+  const dl = S.models.find(x => !isTTS(x) && x.status === 'downloading');
+  if (dl) return `<div class="empty tx-dl"><b>正在下载 ${esc(dl.name)}</b><span data-txprog>准备中…</span>
+    <div class="bar"><i data-txbar></i></div><span class="note">下载完就能用，这个页面会自动刷新；也可以先去做别的。</span></div>`;
   const local = S.models.find(x => !isTTS(x) && x.provider === 'local'), cloud = S.models.filter(x => !isTTS(x) && x.provider !== 'local');
   return `<div class="empty"><b>还没有能用的识别模型</b>下载一个本地模型，完全离线识别；或者连接支持识别的云端 Provider（${[...new Set(cloud.map(x => esc(PV(x.provider)?.name || x.provider)))].join('、')}）。
     <div class="empty-a">${local ? `<button class="btn primary" type="button" data-txadd="${esc(local.id)}">${ic('download', 14)}下载 ${esc(local.name)}（${local.size_gb} GB）</button>` : ''}
@@ -1183,9 +1186,28 @@ function txEmpty() {
 function bindTxEmpty(main) {
   $$('[data-txadd]', main).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = '开始下载…';
-    try { await api('/api/models/add', { model: b.dataset.txadd }); toast('开始下载，可以在模型页看进度', 3000); location.hash = '#/models/local'; }
+    try { await api('/api/models/add', { model: b.dataset.txadd }); await refreshModels(); pageTranscribe(main); }   // 先刷新状态，页面才知道它在下载
     catch (e) { toast(e.message, 5000); b.disabled = false; }
   });
+  if (S.models.some(x => !isTTS(x) && x.status === 'downloading')) pollTxPull(main);
+}
+// 转写页里直接显示下载进度（和模型页用同一个接口），下载完自动变成可用
+function pollTxPull(main) {
+  clearTimeout(S._txPoll);
+  S._txPoll = setTimeout(async () => {
+    const dl = S.models.find(x => !isTTS(x) && x.status === 'downloading'); if (!dl || S.route !== 'transcribe') return;
+    const st = await api('/api/models/pull?model=' + encodeURIComponent(dl.id)).catch(() => null);
+    if (st) {
+      const bar = $('[data-txbar]', main), lab = $('[data-txprog]', main), pct = st.total ? Math.min(1, st.done / st.total) : 0;
+      if (bar) bar.style.transform = `scaleX(${pct})`;
+      if (lab) lab.textContent = st.total ? `${(st.done / 1e9).toFixed(2)} / ${(st.total / 1e9).toFixed(2)} GB · ${Math.round(pct * 100)}%` : '准备中…';
+      if (st.state === 'done' || st.state === 'error') {
+        toast(st.state === 'error' ? `下载失败：${st.error}` : '下载完成，已校验，可以转写了', st.state === 'error' ? 6000 : 3000);
+        await refreshModels(); refreshStatus(); return pageTranscribe(main);
+      }
+    }
+    pollTxPull(main);
+  }, 1500);
 }
 function renderTxOpts(main) {
   const el = $('#txOpts', main); if (!el) return;
