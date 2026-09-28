@@ -140,6 +140,10 @@ def add_model(mid: str | None = None, provider: str | None = None, remote: str |
     m = catalog.find_model(mid) if mid else None
     if not m and provider and remote:
         m = catalog.find_model(f"{provider}/{remote.strip()}")
+    if m and m["task"] != task and task != "tts":
+        if m["source"] == "registry":
+            raise VoxError(f"{m['id']} 是登记过的{'语音合成' if m['task'] == 'tts' else '语音识别'}模型，不能改成别的类型")
+        provider, remote, mid, m = m["provider"], m["remote"], None, None   # 在线列表猜的类型不对：按用户说的登记
     if m and m["provider"] == "local":
         return pull(m["id"], background=True)
     if not m:

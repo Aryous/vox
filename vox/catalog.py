@@ -199,7 +199,7 @@ def custom_provider(pid: str, cfg: dict) -> dict:
 
 
 def rebuild():
-    """重新组装 MODELS：注册表 → 在线列表缓存 → 用户手动添加；同一个模型只保留最先出现的（注册表优先）。"""
+    """重新组装 MODELS：注册表 → 用户手动添加 → 在线列表缓存；同一个模型只保留最先出现的（注册表优先）。"""
     global REG
     REG = load_registry()
     PROVIDERS.clear()
@@ -229,13 +229,14 @@ def rebuild():
             first = next((m for m in out if m["provider"] == pid and m["task"] == task), None)
             if first:
                 templates.setdefault(tpl_key(pid, task), first)
+    # 用户手动添加的排在在线列表前面：在线列表只给模型 ID，是合成还是识别靠猜；用户明确说过的以用户为准
+    for e in _read(PREFS, {}).get("custom", []):
+        e = {**e, "template": e.get("template") or tpl_key(e.get("provider"), e.get("task", "tts"))}
+        add(materialize(e, "custom", templates))
     for f in sorted(DISCOVERED.glob("*.json")) if DISCOVERED.exists() else []:
         for e in _read(f, {}).get("items", []):
             e = {**e, "template": e.get("template") or (tpl_key(e.get("provider"), e.get("task", "tts")) if not e.get("caps") else None)}
             add(materialize(e, "discovered", templates))
-    for e in _read(PREFS, {}).get("custom", []):
-        e = {**e, "template": e.get("template") or tpl_key(e.get("provider"), e.get("task", "tts"))}
-        add(materialize(e, "custom", templates))
     MODELS[:] = out
     _BY_ID.clear()
     for m in out:
