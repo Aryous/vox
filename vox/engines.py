@@ -1,7 +1,8 @@
-"""TTS 引擎。每个引擎实现 synth(text, voice, instruct, speed, lang, seed, **采样参数) -> (float32 音频, 采样率)，
-以及 voices() / languages() / is_ready()。类属性 params 声明它支持哪些可调参数，WebUI 据此显示控件。
+"""本地引擎。按模型实例化（get(模型字典)），同一类引擎可以跑不同的仓库（尺寸、量化）；新增引擎写一个类，登记到 ENGINES。
 
-新增引擎：写一个类，登记到 ENGINES。引擎按模型实例化（get(模型字典)），同一类引擎可以跑不同的仓库（尺寸、量化）。
+合成（tts）引擎实现 synth(text, voice, instruct, speed, lang, seed, **采样参数) -> (float32 音频, 采样率)，以及 voices() / languages()。
+识别（stt）引擎实现 transcribe(wav 路径, language, prompt, hotwords) -> dict（text / language / segments），见 MlxSTT。
+所有引擎都有 is_ready()（文件是否在本地）、is_loaded()（是否在内存里）、local_path()。
 """
 from __future__ import annotations
 
@@ -99,8 +100,8 @@ class Kokoro(Engine):
         return wav.astype(np.float32), 24000
 
 
-class _Qwen3(Engine):
-    native_speed = False
+class _MlxRepo(Engine):
+    """用 vox 下载的 MLX 仓库（~/.vox/models/<repo>，见 fetch.py）或本机路径运行的引擎：合成和识别共用。"""
 
     def __init__(self, repo=None):
         self.model = repo or self.model
@@ -124,16 +125,26 @@ class _Qwen3(Engine):
     def is_loaded(self):
         return self._m is not None
 
+    def _loader(self):
+        raise NotImplementedError
+
     def _load(self):
         if not self._m:
             src = self._src()
             if not src:
-                raise SystemExit(f"模型未下载：先运行 vox pull {self.name}（约 3 GB，走 ModelScope 并校验哈希）")
-            from mlx_audio.tts.utils import load_model
-
+                raise SystemExit(f"模型未下载：先运行 vox models add {self.model}（走 ModelScope 并按 HuggingFace 哈希校验）")
             with contextlib.redirect_stdout(sys.stderr):  # 库在加载时会往 stdout 打日志
-                self._m = load_model(src)
+                self._m = self._loader()(src)
         return self._m
+
+
+class _Qwen3(_MlxRepo):
+    native_speed = False
+
+    def _loader(self):
+        from mlx_audio.tts.utils import load_model
+
+        return load_model
 
     def languages(self):
         return self._load().get_supported_languages()
@@ -194,7 +205,46 @@ class Qwen3Design(_Qwen3):
         return self._collect(m.generate_voice_design(text=text, instruct=desc, language=lang, **self._gen(gen))), m.sample_rate
 
 
-ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro)}
+class MlxSTT(_MlxRepo):
+    """mlx-audio 的语音识别：同一个接口跑 Qwen3-ASR、SenseVoice、Fun-ASR、Whisper、Parakeet……（按仓库里的 config 自动选实现）。
+    换模型只需要在注册表里换 repo。输入是 16 kHz 单声道 wav（stt.py 用 ffmpeg 先转好）。"""
+    name = "mlx-stt"
+    model = "mlx-community/Qwen3-ASR-0.6B-8bit"
+    params = ("language", "prompt", "hotwords")
+
+    def voices(self):
+        return []
+
+    def _loader(self):
+        from mlx_audio.stt.utils import load_model
+
+        return load_model
+
+    def transcribe(self, wav: str, language: str | None = None, prompt: str | None = None, hotwords: list[str] | None = None) -> dict:
+        import inspect
+
+        m = self._load()
+        accepts = inspect.signature(m.generate).parameters
+        kw = {}
+        if language and "language" in accepts:
+            kw["language"] = language
+        if hotwords and "hotwords" in accepts:
+            kw["hotwords"] = hotwords
+        if prompt:
+            for k in ("system_prompt", "initial_prompt", "prompt"):   # 各实现的叫法不一
+                if k in accepts:
+                    kw[k] = prompt
+                    break
+        with contextlib.redirect_stdout(sys.stderr):
+            r = m.generate(wav, **kw)
+        lang = r.language[0] if isinstance(r.language, list) and r.language else r.language
+        segs = [{"start": float(x.get("start", 0)), "end": float(x.get("end", 0)), "text": str(x.get("text", "")).strip(),
+                 **({"words": [{"start": float(w["start"]), "end": float(w["end"]), "word": w.get("word", "")} for w in x["words"]]} if x.get("words") else {})}
+                for x in (r.segments or []) if isinstance(x, dict)]
+        return {"text": (r.text or "").strip(), "language": lang if isinstance(lang, str) else None, "segments": segs}
+
+
+ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro, MlxSTT)}
 _live: dict[str, Engine] = {}   # 模型 ID → 引擎实例
 
 

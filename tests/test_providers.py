@@ -263,7 +263,7 @@ class ModelListTest(unittest.TestCase):
         r, calls = self._discover("openai", {"data": [{"id": "gpt-4o-mini-tts"}, {"id": "tts-1-hd"}, {"id": "gpt-5"}, {"id": "whisper-1"}]})
         self.assertEqual(calls[0]["url"], "https://api.openai.com/v1/models")
         self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer sk-openai-test")
-        ms = {m["remote"]: m for m in r["models"]}
+        ms = {m["remote"]: m for m in r["models"] if m["task"] == "tts"}   # 这家的识别模型（注册表里登记的）另算
         self.assertEqual(set(ms), {"gpt-4o-mini-tts", "tts-1-hd"})
         self.assertEqual(ms["gpt-4o-mini-tts"]["source"], "registry")      # 注册表里有的保留核对过的信息
         self.assertTrue(ms["tts-1-hd"]["inferred"])                         # 注册表里没有的：能力按同家推断
@@ -273,7 +273,8 @@ class ModelListTest(unittest.TestCase):
     def test_siliconflow_audio_type_excludes_asr(self):
         r, calls = self._discover("siliconflow", {"data": [{"id": "FunAudioLLM/CosyVoice2-0.5B"}, {"id": "FunAudioLLM/SenseVoiceSmall"}, {"id": "fishaudio/fish-speech-1.5"}]})
         self.assertTrue(calls[0]["url"].endswith("/models?type=audio"))
-        self.assertEqual(sorted(m["remote"] for m in r["models"]), ["FunAudioLLM/CosyVoice2-0.5B", "fishaudio/fish-speech-1.5"])
+        self.assertEqual(sorted(m["remote"] for m in r["models"] if m["task"] == "tts"), ["FunAudioLLM/CosyVoice2-0.5B", "fishaudio/fish-speech-1.5"])
+        self.assertEqual([m["task"] for m in r["models"] if m["remote"] == "FunAudioLLM/SenseVoiceSmall"], ["stt"])   # 同一个 ID 只作识别模型出现
 
     def test_elevenlabs_and_gemini(self):
         r, _ = self._discover("elevenlabs", [{"model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": True},
@@ -585,6 +586,119 @@ class GeminiVoiceListTest(unittest.TestCase):
         self.assertNotIn("achernar", ids); self.assertNotIn("zephyr", ids)   # 大小写不同的同名音色不重复
         self.assertIn("cmn-cn-narrator-3", ids)                      # 第二页（中文）也拿到了
         self.assertEqual(next(v for v in vs if v["voice"] == "cmn-cn-narrator-3")["gender"], "男")
+
+
+class STTTest(unittest.TestCase):
+    """语音识别：模型目录的任务隔离、请求检查、云端响应解析、本地流程、缓存与输出格式（全部离线）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from vox import stt
+        cls.stt = stt
+
+    def test_catalog_separates_tasks(self):
+        import json as _j
+        reg = _j.loads(catalog.BUILTIN.read_text())
+        self.assertTrue(all("task" not in e for e in reg["models"]))           # 旧版只认 models：里面不能混进识别模型
+        stts = [m for m in catalog.MODELS if m["task"] == "stt"]
+        self.assertTrue(stts and all(not m["voices"] and not m["caps"]["voices"] for m in stts))
+        sf = catalog.find_model("siliconflow/FunAudioLLM/SenseVoiceSmall")
+        self.assertEqual(sf["task"], "stt")
+        self.assertNotIn("voice_prefix", sf["compat"]); self.assertNotIn("extra", sf["compat"])   # 合成专用配置不带进识别
+        self.assertEqual(sf["compat"]["base"], "https://api.siliconflow.cn/v1")
+        self.assertIn("stt", catalog.custom_provider("x", {"base_url": "http://h/v1", "auth": False}))
+
+    def test_request_checks(self):
+        with self.assertRaises(hub.VoxError):
+            self.stt.normalize({"model": "local/qwen3"})                         # 合成模型不能识别
+        with self.assertRaises(hub.VoxError):
+            hub.normalize({"model": "local/qwen3-asr", "input": "x"})            # 识别模型不能合成
+        with self.assertRaises(hub.VoxError) as e:
+            self.stt.normalize({"model": "local/qwen3-asr", "diarize": True})
+        self.assertIn("gpt-4o-transcribe-diarize", str(e.exception))             # 报错里给出能用的模型
+        r = self.stt.normalize({"model": "local/whisper-turbo", "language": "ZH", "prompt": "vox", "hotwords": "a，b"})
+        self.assertEqual(r, {"model": "local/whisper-turbo", "language": "zh", "prompt": "vox"})   # whisper 不认热词：不传
+        self.assertEqual(self.stt.normalize({"model": "qwen3-asr", "hotwords": "a，b", "language": "auto"})["hotwords"], ["a", "b"])
+
+    def _cloud(self, model_id, resp, **req):
+        from vox.providers import openai_compat
+        m = catalog.find_model(model_id)
+        fake = Fake(resp)
+        old = openai_compat.http
+        openai_compat.http = fake
+        try:
+            wav = TMP / "speech.wav"; wav.write_bytes(WAV)
+            rec = self.stt.transcribe(wav, {"model": m["id"], "cache": False, **req}, source="test")
+        finally:
+            openai_compat.http = old
+        return rec, fake.calls[0]
+
+    def test_openai_verbose_json_words(self):
+        resp = {"text": "你好 世界", "language": "chinese", "duration": 0.3,
+                "segments": [{"start": 0, "end": 0.15, "text": " 你好"}, {"start": 0.15, "end": 0.3, "text": "世界"}],
+                "words": [{"word": "你好", "start": 0, "end": 0.1}]}
+        rec, call = self._cloud("openai/whisper-1", resp, words=True, language="zh", prompt="vox")
+        self.assertEqual(call["url"], "https://api.openai.com/v1/audio/transcriptions")
+        self.assertTrue(call["headers"]["Content-Type"].startswith("multipart/form-data; boundary="))
+        body = call["body"]
+        for field in (b'name="model"\r\n\r\nwhisper-1', b'name="response_format"\r\n\r\nverbose_json', b'name="language"\r\n\r\nzh',
+                      b'name="prompt"\r\n\r\nvox', b'name="timestamp_granularities[]"\r\n\r\nword', b'filename="speech.wav"'):
+            self.assertIn(field, body)
+        self.assertEqual(rec["segments"][0], {"start": 0.0, "end": 0.15, "text": "你好"})
+        self.assertEqual(rec["words"][0]["word"], "你好")
+        self.assertIsNotNone(rec["cost"])
+        self.assertIn("00:00:00,150 --> 00:00:00,300\n世界", self.stt.render(rec, "srt"))
+        self.assertTrue(self.stt.render(rec, "vtt").startswith("WEBVTT\n\n00:00:00.000 --> 00:00:00.150\n你好"))   # vtt 不带序号
+
+    def test_openai_diarized(self):
+        resp = {"text": "a b", "duration": 0.3, "segments": [{"speaker": "A", "start": 0, "end": 0.1, "text": "a"}, {"speaker": "B", "start": 0.1, "end": 0.3, "text": "b"}]}
+        rec, call = self._cloud("openai/gpt-4o-transcribe-diarize", resp, diarize=True)
+        self.assertIn(b'name="chunking_strategy"\r\n\r\nauto', call["body"])
+        self.assertEqual(self.stt.render(rec, "txt"), "[A] a\n[B] b\n")
+        self.assertIn("[B] b", self.stt.render(rec, "srt"))
+
+    def test_local_flow_cache_and_untimed_subtitles(self):
+        calls = []
+
+        class FakeASR:
+            def transcribe(self, wav, language=None, prompt=None, hotwords=None):
+                calls.append((wav, language, hotwords))
+                return {"text": "测试一下", "language": "zh", "segments": [{"start": 0, "end": 0.3, "text": "测试一下"}]}
+
+        old = hub._engine
+        hub._engine = lambda m: FakeASR()
+        try:
+            src = TMP / "clip.mp3"; src.write_bytes(MP3)
+            r1 = self.stt.transcribe(src, {"model": "qwen3-asr", "hotwords": ["vox"]}, source="test")
+            r2 = self.stt.transcribe(src, {"model": "qwen3-asr", "hotwords": ["vox"]}, source="test")
+            r3 = self.stt.transcribe(src, {"model": "qwen3-asr", "hotwords": ["vox"], "cache": False}, source="test")
+        finally:
+            hub._engine = old
+        self.assertEqual(len(calls), 2)                                          # 第二次命中缓存
+        self.assertTrue(calls[0][0].endswith("in.wav")); self.assertEqual(calls[0][2], ["vox"])
+        self.assertTrue(r2.get("cached")); self.assertEqual(r1["id"], r3["id"])
+        self.assertGreater(r1["duration"], 0.2)                                  # 时长来自转换后的 wav
+        self.assertEqual(self.stt.get(r1["id"])["text"], "测试一下")
+        self.assertIn(r1["id"], [x["id"] for x in self.stt.records()])
+        self.assertEqual(self.stt.render(r1, "txt"), "测试一下\n")
+        with self.assertRaises(hub.VoxError) as e:
+            self.stt.render(r1, "srt")                                            # Qwen3-ASR 只有分块、没有分句：不假装能出字幕
+        self.assertIn("whisper-turbo", str(e.exception))
+        self.stt.delete(r1["id"])
+        with self.assertRaises(hub.VoxError):
+            self.stt.get(r1["id"])
+
+    def test_upload_transcode(self):
+        src = TMP / "u.wav"; src.write_bytes(WAV)
+        self.assertEqual(audio.for_upload(src, ["wav", "mp3"], 25, TMP), src)                  # 支持的格式、没超限：原样
+        up = audio.for_upload(src, ["mp3"], 25, TMP)
+        self.assertEqual(up.suffix, ".mp3"); self.assertTrue(up.exists())
+        with self.assertRaises(ValueError):
+            audio.for_upload(src, ["mp3"], 0.000001, TMP)                                     # 压缩后还超限：报错而不是硬传
+
+    def test_estimate_by_duration(self):
+        m = catalog.find_model("openai/gpt-transcribe")
+        self.assertAlmostEqual(self.stt.estimate(m, 600)["amount"], 0.27 / 6, places=4)       # 10 分钟 = 0.045 美元
 
 
 class CacheTest(unittest.TestCase):

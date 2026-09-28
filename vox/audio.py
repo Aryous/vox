@@ -67,3 +67,31 @@ def bytes_to_wav(data: bytes, fmt: str, out: Path, speed=1.0, native_speed=True)
     if r.returncode:
         raise ValueError(f"音频解码失败（{fmt}）：{r.stderr.strip()[:200]}")
     return duration(out)
+
+
+# ---------- 识别的输入 ----------
+def to_wav16k(src: Path, out: Path) -> float:
+    """任意音视频 → 16 kHz 单声道 wav（本地识别模型的输入）。返回时长秒。"""
+    _ff()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", str(out)], capture_output=True, text=True)
+    if r.returncode:
+        raise ValueError(f"读不了这个文件（{src.name}）：{r.stderr.strip()[:200]}")
+    return duration(out)
+
+
+def for_upload(src: Path, formats: list[str] | None, max_mb: float | None, work: Path) -> Path:
+    """上传给云端的文件：格式在对方支持的列表里、大小没超限就原样发；否则转成 16 kHz 单声道 mp3（约 14 MB / 小时）。"""
+    ext = src.suffix.lower().lstrip(".")
+    size_mb = src.stat().st_size / 1e6
+    if (not formats or ext in formats) and (not max_mb or size_mb <= max_mb):
+        return src
+    _ff()
+    out = work / (src.stem + ".upload.mp3")
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", str(out)],
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise ValueError(f"读不了这个文件（{src.name}）：{r.stderr.strip()[:200]}")
+    if max_mb and out.stat().st_size / 1e6 > max_mb:
+        raise ValueError(f"文件太长：压缩后仍有 {out.stat().st_size / 1e6:.0f} MB，超过这家 {max_mb:.0f} MB 的上限；可以先切成几段，或换本地模型")
+    return out

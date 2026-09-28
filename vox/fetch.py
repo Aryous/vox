@@ -75,10 +75,18 @@ def fetch(repo: str, source: str = "modelscope") -> Path:
         out.parent.mkdir(parents=True, exist_ok=True)
         if out.exists() and out.stat().st_size == size and _digest(out, oid[0]) == oid[1]:
             continue
-        url = SOURCES[source].format(repo=repo, path=path)
         print(f"↓ {path}  {size / 1e6:.1f} MB", file=sys.stderr)
-        # curl：-C - 断点续传，--retry 应对抖动；进度条输出到 stderr
-        subprocess.run(["curl", "-L", "--fail", "--retry", "5", "-C", "-", "-o", str(out), url] + ([] if size > 5e6 else ["-s"]), check=True)
+        # curl：-C - 断点续传，--retry 应对抖动；进度条输出到 stderr。
+        # ModelScope 没有镜像这个仓库（或这个文件）时改从 HuggingFace 下载：校验值都以 HuggingFace 为准，来源不影响结果
+        for src in dict.fromkeys([source, "hf"]):
+            url = SOURCES[src].format(repo=repo, path=path)
+            r = subprocess.run(["curl", "-L", "--fail", "--retry", "5", "-C", "-", "-o", str(out), url] + ([] if size > 5e6 else ["-s"]))
+            if r.returncode == 0:
+                break
+            out.unlink(missing_ok=True)
+            print(f"  {src} 上取不到，换下一个来源", file=sys.stderr)
+        else:
+            raise SystemExit(f"✗ 下载失败：{path}")
         if out.stat().st_size != size or _digest(out, oid[0]) != oid[1]:
             out.unlink()
             raise SystemExit(f"✗ 校验失败：{path}（已删除，重跑 vox pull 会重新下载）")

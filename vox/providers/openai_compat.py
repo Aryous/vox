@@ -1,5 +1,7 @@
-"""OpenAI 兼容适配器：POST {base}/audio/speech，返回裸音频。
-一份代码覆盖 OpenAI、Inworld、阶跃星辰、硅基流动、OpenRouter；差异都写在注册表的 `compat` 配置中：
+"""OpenAI 兼容适配器：合成 POST {base}/audio/speech（返回裸音频），识别 POST {base}/audio/transcriptions（multipart 上传）。
+一份代码覆盖 OpenAI、Inworld、阶跃星辰、硅基流动、OpenRouter、自定义 Provider；差异都写在注册表的 `compat` 配置中。
+
+合成：
 
   base            默认 base URL（可用 <PROVIDER>_BASE_URL 环境变量覆盖，如接代理或国际站）
   auth            Authorization 前缀，默认 Bearer
@@ -9,6 +11,13 @@
   speed           [最小, 最大]，超出按边界裁剪；null 表示不传 speed，改由 ffmpeg 变速（OpenRouter：各家支持不一）
   voice_prefix    音色要带模型前缀（硅基：FunAudioLLM/CosyVoice2-0.5B:alex）
   extra           每次请求附加的固定字段
+
+识别（注册表 providers.<id>.stt.compat 与 stt_models[].compat）：
+  response        要的返回格式：json（只有文本）/ verbose_json（分句 + 逐词时间戳，whisper-1）/ diarized_json（带说话人）
+  chunking        chunking_strategy（OpenAI 的说话人分离要求长于 30 秒的音频传 auto）
+  formats         对方接受的文件格式；不在列表里的先转 mp3
+  max_mb          上传大小上限；超过的先压缩
+  语种统一用 language 字段（OpenAI API 参考如此；指南里写 gpt-transcribe 用复数 languages，两处不一致，待用真 Key 核实）
 """
 from __future__ import annotations
 
@@ -17,7 +26,9 @@ import re
 from urllib.parse import quote
 
 from .. import credentials
-from .base import CloudEngine, ProviderError, clamp, http
+from pathlib import Path
+
+from .base import CloudEngine, ProviderError, clamp, http, multipart
 
 CJK = re.compile(r"[㐀-鿿぀-ヿ가-힯]")
 
@@ -37,6 +48,15 @@ def parse_voice_list(j) -> list[dict]:
                 out.append({"voice": str(vid), "name": v.get("name") or str(vid), "gender": g,
                             "lang": v.get("lang") or v.get("language") or "", "description": v.get("description") or ""})
     return out
+
+
+def parse_transcription(j: dict) -> dict:
+    """OpenAI 的三种 JSON 返回（json / verbose_json / diarized_json）统一成 vox 的识别结果。"""
+    segs = [{"start": float(x.get("start", 0)), "end": float(x.get("end", 0)), "text": str(x.get("text", "")).strip(),
+             **({"speaker": str(x["speaker"])} if x.get("speaker") not in (None, "") else {})} for x in j.get("segments") or []]
+    words = [{"start": float(w.get("start", 0)), "end": float(w.get("end", 0)), "word": w.get("word", "")} for w in j.get("words") or []]
+    return {"text": (j.get("text") or " ".join(x["text"] for x in segs)).strip(), "language": j.get("language"),
+            "duration": j.get("duration"), "segments": segs, "words": words}
 
 
 class OpenAICompat(CloudEngine):
@@ -101,3 +121,25 @@ class OpenAICompat(CloudEngine):
         if audio[:1] == b"{":  # 少数情况下返回 JSON（如阶跃 return_url），不当音频处理
             raise ProviderError(f"没有返回音频：{audio[:300].decode('utf-8', 'replace')}")
         return audio, "mp3"
+
+    def transcribe(self, req, audio: Path):
+        c, caps = self.c, self.m["caps"]
+        fmt = c.get("response", "json")
+        fields = [("model", self.m["remote"]), ("response_format", fmt)]
+        if req.get("language"):
+            fields.append(("language", req["language"]))
+        if req.get("prompt") and caps.get("prompt"):
+            fields.append(("prompt", req["prompt"]))
+        if fmt == "verbose_json":
+            fields += [("timestamp_granularities[]", "segment")] + ([("timestamp_granularities[]", "word")] if req.get("words") else [])
+        if c.get("chunking"):
+            fields.append(("chunking_strategy", c["chunking"]))
+        body, ctype = multipart(fields, [("file", audio)])
+        _, _, raw = http("POST", f"{self.base}/audio/transcriptions", {**self._h(), "Content-Type": ctype}, body, timeout=900)
+        try:
+            j = json.loads(raw)
+        except ValueError:
+            return {"text": raw.decode("utf-8", "replace").strip(), "segments": [], "words": []}   # 有的服务无视 response_format，直接回纯文本
+        if not isinstance(j, dict):
+            raise ProviderError(f"识别结果格式不对：{raw[:200].decode('utf-8', 'replace')}")
+        return parse_transcription(j)
