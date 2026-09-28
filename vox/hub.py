@@ -553,13 +553,21 @@ def update_history(cid: str, star: bool | None = None, delete: bool = False):
 
 
 def asr(cid: str) -> str:
+    """读音校对：把合成结果转回文字。优先用 vox 自己的本地识别模型；没有时退回 coli。
+    只用本地模型——WebUI 默认每次合成都自动校对，用云端识别会每句计费。"""
+    from . import stt
+
     f = clip_path(cid)
     if not f.exists():
         raise VoxError("找不到这条音频")
-    if not shutil.which("coli"):
-        raise VoxError("读音校对需要本机的 coli（npm install -g @marswave/coli）")
-    r = subprocess.run(["coli", "asr", str(f)], capture_output=True, text=True, timeout=180)
-    text = (r.stdout.strip().splitlines() or [""])[-1]
+    m = stt.local_model()
+    if m:
+        text = stt.transcribe(f, {"model": m["id"]}, source="asr", record=False)["text"]
+    elif shutil.which("coli"):
+        r = subprocess.run(["coli", "asr", str(f)], capture_output=True, text=True, timeout=180)
+        text = (r.stdout.strip().splitlines() or [""])[-1]
+    else:
+        raise VoxError("读音校对需要一个本地识别模型：vox models add qwen3-asr（约 1 GB）")
     with FILE_LOCK:
         h = history()
         for x in h:
@@ -583,7 +591,8 @@ def status() -> dict:
 
     return {"version": __version__, "uptime": round(time.time() - START), "memory_bytes": rss,
             "loaded": engines.loaded(),
-            "asr": bool(shutil.which("coli")), "ffmpeg": bool(shutil.which("ffmpeg")), **paths.summary()}
+            "asr": bool(shutil.which("coli")) or any(m["task"] == "stt" and m["provider"] == "local" and usable(m) for m in catalog.MODELS),
+            "ffmpeg": bool(shutil.which("ffmpeg")), **paths.summary()}
 
 
 # ---------- Provider 与凭证 ----------

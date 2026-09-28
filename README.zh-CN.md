@@ -1,7 +1,7 @@
 # vox
 
-**一个接口，调用所有 TTS 模型：本地和云端。**
-像 LM Studio 管理大模型一样管理语音合成模型，像 OpenRouter 一样用一套接口调用它们。
+**一个接口，调用语音模型：合成与识别，本地与云端。**
+像 LM Studio 管理大模型一样管理语音模型，像 OpenRouter 一样用一套接口调用它们。
 
 [English](README.md) · 中文
 
@@ -16,6 +16,7 @@
 - **本地模型，离线运行。** Qwen3-TTS（CustomVoice 和 VoiceDesign，`mlx-community` 发布的各尺寸、各量化版本）和 Kokoro-82M 中文版。下载时逐个文件按 HuggingFace 的哈希校验。
 - **云端 Provider，同一套接口。** OpenRouter 加 10 家厂商（见下表）。各家的差异，比如情绪指令放哪、语速范围、音频是 base64 / hex / 临时链接 / 分块返回，都由适配器处理。
 - **自定义 Provider。** 接入任何 OpenAI 兼容的语音服务：自己部署的 Kokoro-FastAPI、代理、vox 还没收录的厂商，或者另一台 vox。
+- **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`，网页上有「转写」页。模型支持时还能区分说话人、给出逐词时间戳。
 - **先听再选。** 音色库里每个音色都读同一段样本；试音台有对比模式：同一段文本、同一组语气 / 语速 / 种子，几个音色或模型排成清单，一键同时生成（先给费用预估）；想单独调其中一个，就基于它做变体，和原来的并排比较。
 
 | 音色库 | 模型与 Provider |
@@ -27,7 +28,7 @@
 - 本地模型需要 Apple Silicon 的 Mac（基于 [MLX](https://github.com/ml-explore/mlx) 运行）。云端和自定义 Provider 只是 HTTP 调用，但目前只在 macOS 上测试过。
 - Python 3.10 以上（推荐 3.12）和 [uv](https://docs.astral.sh/uv/)。
 - `ffmpeg`（`brew install ffmpeg`），用于格式转换和变速。
-- 可选：[`coli`](https://www.npmjs.com/package/@marswave/coli)，用于读音校对（本地语音识别）。没有也不影响其他功能。
+- 读音校对用本地语音识别模型（比如 `vox models add qwen3-asr`）；装了 [`coli`](https://www.npmjs.com/package/@marswave/coli) 的话也可以作为后备。
 
 ## 安装
 
@@ -54,6 +55,8 @@ vox models add qwen3                      # 下载 Qwen3-TTS CustomVoice 1.7B（
 vox say "今天天气不错。" -m qwen3 -v serena -i "轻快友好" --seed 42 --play
 vox say "Hello from vox." -m qwen3 -v ryan -o hello.mp3
 vox voices -m qwen3                       # 某个模型的音色
+vox models add qwen3-asr                  # 本地语音识别（Qwen3-ASR 0.6B，约 1 GB）
+vox transcribe 会议.m4a -o 会议.txt        # 音频 / 视频 → 文字；-o 访谈.srt 导出字幕（需要带时间戳的模型）
 vox serve --open                          # 网页界面 + API
 ```
 
@@ -119,6 +122,9 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 | 情绪 / 声音描述 | `-i` | `instructions` | `"轻快友好"`；声音设计模型里是对声音的描述 |
 | 语速 | `-s` | `speed` | `0.25`–`4` |
 | 种子 | `--seed` | `seed` | 支持的模型可以复现同一版声音 |
+| 语种提示（识别） | `-l` | `language` | `zh`、`en`；不填自动识别 |
+| 热词 / 上下文（识别） | `--hotwords` / `--prompt` | `hotwords` / `prompt` | 只传给支持的模型 |
+| 说话人 / 逐词时间（识别） | `--diarize` / `--words` | `diarize` / `words` | 模型不支持时明确报错，而不是悄悄忽略 |
 
 ## 命令行
 
@@ -131,6 +137,8 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 | `vox voices` · `vox sample <引用> --play` | 浏览音色 · 试听音色样本 |
 | `vox say <文本>` | 合成（`-` 从标准输入读；`-o 文件.mp3`；`--play`） |
 | `vox batch script.json` | 多角色脚本批量合成，只重做改动过的句子 |
+| `vox transcribe <文件…>` | 语音识别（`-m`、`-l zh`、`--hotwords`、`--diarize`、`--words`、`-f txt\|srt\|vtt\|json`、`-o`） |
+| `vox transcripts [show\|rm]` | 转写记录，与网页共享 |
 | `vox history [--star]` | 合成历史，和网页共享 |
 | `vox keys` · `vox providers` | 凭证 · Provider（包括自定义的） |
 | `vox serve` · `vox status` | 网页 + API · 服务状态和文件位置 |
@@ -160,7 +168,7 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 
 | | 位置 | 内容 |
 | --- | --- | --- |
-| 数据 | `~/.vox` | 合成结果、音色样本、历史、我的音色、设置、我的模型、自定义 Provider |
+| 数据 | `~/.vox` | 合成结果、转写记录、音色样本、历史、我的音色、设置、我的模型、自定义 Provider |
 | 模型 | `~/.vox/models` | 本地模型文件（已排除出 Time Machine，能重新下载） |
 | 缓存 | `~/Library/Caches/vox`（其他系统为 `~/.cache/vox`） | 在线模型列表、云端音色列表、新版注册表，删了会自动重新获取 |
 | Key | `~/.config/vox/credentials.json` | 权限 600；环境变量优先 |

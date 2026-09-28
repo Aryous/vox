@@ -279,7 +279,7 @@ def cmd_transcripts(a):
         r = _server("/api/transcripts/delete", {"id": a.id}) or _call(stt.delete, a.id or "")
         return _out(a, r, lambda: print(f"✓ 已删除 {r['id']}"))
     rs = _server(f"/api/transcripts?limit={a.limit}") or stt.records(a.limit)
-    _out(a, rs, lambda: [print(f"{r['id']}  {r['request']['model']:<28} {r['duration'] or 0:7.1f}s  {r['file'][:24]:<24}  {r['preview'][:40]}") for r in rs]
+    _out(a, rs, lambda: [print(f"{r['id']}  {_pad(r['request']['model'], 32)} {r['duration'] or 0:7.1f}s  {_pad(r['file'][:20], 22)}  {r['preview'][:40]}") for r in rs]
          if rs else print("还没有转写记录。vox transcribe <音频文件>"))
 
 

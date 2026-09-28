@@ -52,6 +52,14 @@ def default_model() -> dict:
     raise VoxError(f"还没有能用的语音识别模型。{hint}；或连接支持识别的云端 Provider，见 vox models --task stt --all")
 
 
+def local_model() -> dict | None:
+    """能用的本地识别模型（设置里指定的优先）：给读音校对这类自动、高频的用途，不花钱、不上传。"""
+    pick = catalog.find_model(hub.settings().get("stt_model") or "")
+    if pick and pick["task"] == "stt" and pick["provider"] == "local" and hub.usable(pick):
+        return pick
+    return next((m for m in stt_models() if m["provider"] == "local" and hub.usable(m)), None)
+
+
 def _model(mid: str | None) -> dict:
     if not mid:
         return default_model()
@@ -111,8 +119,8 @@ def estimate(m: dict, seconds: float) -> dict | None:
 
 
 # ---------- 识别 ----------
-def transcribe(src: Path, request: dict, source: str = "cli", filename: str | None = None) -> dict:
-    """识别一个音频 / 视频文件。src 是本机文件（HTTP 上传的先落到临时文件）。"""
+def transcribe(src: Path, request: dict, source: str = "cli", filename: str | None = None, record: bool = True) -> dict:
+    """识别一个音频 / 视频文件。src 是本机文件（HTTP 上传的先落到临时文件）。record=False 时不写转写记录（读音校对这类内部用途）。"""
     src = Path(src)
     if not src.exists() or not src.is_file():
         raise VoxError(f"找不到文件：{src}")
@@ -152,6 +160,8 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
         rec["words"] = words
     if m["provider"] != "local":
         rec["cost"] = estimate(m, rec["duration"])
+    if not record:
+        return rec
     DIR.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
     tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
