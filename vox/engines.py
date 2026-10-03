@@ -1,13 +1,15 @@
 """本地引擎。按模型实例化（get(模型字典)），同一类引擎可以跑不同的仓库（尺寸、量化）；新增引擎写一个类，登记到 ENGINES。
 
 合成（tts）引擎实现 synth(text, voice, instruct, speed, lang, seed, **采样参数) -> (float32 音频, 采样率)，以及 voices() / languages()。
-识别（stt）引擎实现 transcribe(wav 路径, language, prompt, hotwords) -> dict（text / language / segments），见 MlxSTT。
+识别（stt）引擎实现 transcribe(wav 路径, language, prompt, hotwords, duration) -> dict（text / language / segments），见 MlxSTT。
+引擎的 spec 是它对应的模型条目（注册表字段），引擎按其中的模型专属配置调用（如 prompt_format、tokens_per_sec）。
 所有引擎都有 is_ready()（文件是否在本地）、is_loaded()（是否在内存里）、local_path()。
 """
 from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -26,6 +28,7 @@ class Engine:
     native_speed = False  # 不支持原生语速的引擎，由 cli 用 ffmpeg atempo 变速（音高不变）
     params: tuple[str, ...] = ("voice", "speed")
     default_voice = None
+    spec: dict = {}       # 模型条目，get() 时填入
 
     def voices(self) -> list[str]:
         raise NotImplementedError
@@ -220,7 +223,8 @@ class MlxSTT(_MlxRepo):
 
         return load_model
 
-    def transcribe(self, wav: str, language: str | None = None, prompt: str | None = None, hotwords: list[str] | None = None) -> dict:
+    def transcribe(self, wav: str, language: str | None = None, prompt: str | None = None, hotwords: list[str] | None = None,
+                   duration: float | None = None) -> dict:
         import inspect
 
         m = self._load()
@@ -228,20 +232,37 @@ class MlxSTT(_MlxRepo):
         kw = {}
         if language and "language" in accepts:
             kw["language"] = language
-        if hotwords and "hotwords" in accepts:
+        fmt = self.spec.get("prompt_format")
+        if fmt:   # 模型要求特定的指令写法：热词按它的格式接在指令后面，不走库的通用拼法（会把默认指令整个换掉）
+            prompt = fmt["base"] + (fmt["hotwords"].format(", ".join(hotwords)) if hotwords else "")
+        elif hotwords and "hotwords" in accepts:
             kw["hotwords"] = hotwords
         if prompt:
             for k in ("system_prompt", "initial_prompt", "prompt"):   # 各实现的叫法不一
                 if k in accepts:
                     kw[k] = prompt
                     break
+        tps = self.spec.get("tokens_per_sec")
+        if tps and duration and "max_tokens" in accepts:
+            kw["max_tokens"] = int(duration * tps) + 1024
         with contextlib.redirect_stdout(sys.stderr):
             r = m.generate(wav, **kw)
         lang = r.language[0] if isinstance(r.language, list) and r.language else r.language
-        segs = [{"start": float(x.get("start", 0)), "end": float(x.get("end", 0)), "text": str(x.get("text", "")).strip(),
-                 **({"words": [{"start": float(w["start"]), "end": float(w["end"]), "word": w.get("word", "")} for w in x["words"]]} if x.get("words") else {})}
-                for x in (r.segments or []) if isinstance(x, dict)]
-        return {"text": (r.text or "").strip(), "language": lang if isinstance(lang, str) else None, "segments": segs}
+        segs = [self._seg(x) for x in (r.segments or []) if isinstance(x, dict)]
+        text = (r.text or "").strip()
+        if any("speaker" in x for x in segs):   # 带说话人的模型，原文里夹着 [12.3][S01] 这样的标记：改用分好的段，一段一行
+            text = "\n".join(x["text"] for x in segs)
+        return {"text": text, "language": lang if isinstance(lang, str) else None, "segments": segs}
+
+    @staticmethod
+    def _seg(x: dict) -> dict:
+        spk = x.get("speaker_id") or x.get("speaker")
+        text = str(x.get("text", "")).strip()
+        if spk:
+            text = re.sub(rf"^\[{re.escape(str(spk))}\]\s*", "", text)
+        return {"start": float(x.get("start", 0)), "end": float(x.get("end", 0)), "text": text,
+                **({"speaker": str(spk)} if spk not in (None, "") else {}),
+                **({"words": [{"start": float(w["start"]), "end": float(w["end"]), "word": w.get("word", "")} for w in x["words"]]} if x.get("words") else {})}
 
 
 ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro, MlxSTT)}
@@ -279,4 +300,5 @@ def get(m: dict) -> Engine:
     e = _live.get(m["id"])
     if e is None or e.model != (m.get("repo") or ENGINES[name].model):
         e = _live[m["id"]] = ENGINES[name](m.get("repo"))
+    e.spec = m
     return e

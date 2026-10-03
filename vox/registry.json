@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-09-28",
+ "updated": "2026-10-03",
  "about": "vox 模型注册表：Provider 的连接与适配器配置、已核对的模型元数据（能力、价格、音色）。这是数据，不是代码；新模型优先来自各家的在线列表，注册表只补接口给不了的信息，并作为离线兜底。字段说明见 vox/catalog.py。",
  "providers": {
   "local": {
@@ -2893,6 +2893,36 @@
     "hotwords": true
    },
    "about": "同上的大尺寸，更准、更慢、更占内存。"
+  },
+  {
+   "id": "local/moss-diarize",
+   "alias": "moss",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "MOSS-Transcribe-Diarize 0.9B · 8bit",
+   "family": "MOSS-Transcribe-Diarize",
+   "params_b": 0.9,
+   "quant": "MLX 8bit（社区转换）",
+   "size_gb": 1.27,
+   "license": "Apache-2.0",
+   "repo": "vanch007/mlx-MOSS-Transcribe-Diarize-8bit",
+   "homepage": "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize",
+   "languages": [
+    "中文",
+    "英语",
+    "多语言"
+   ],
+   "caps": {
+    "segments": true,
+    "diarize": true,
+    "hotwords": true
+   },
+   "prompt_format": {
+    "base": "请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。",
+    "hotwords": "热词提示：{}"
+   },
+   "tokens_per_sec": 20,
+   "about": "复旦 OpenMOSS 开源，一次给出文字、说话人（S01、S02…）和分句时间戳，单个文件最长 90 分钟，适合会议、访谈、问诊。比 Qwen3-ASR 慢（17 分钟录音约 6 分钟）；对话很快、抢话时说话人可能分错。MLX 版为社区转换（vanch007）。"
   },
   {
    "id": "local/sensevoice",

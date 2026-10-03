@@ -16,7 +16,7 @@
 - **本地模型，离线运行。** Qwen3-TTS（CustomVoice 和 VoiceDesign，`mlx-community` 发布的各尺寸、各量化版本）和 Kokoro-82M 中文版。下载时逐个文件按 HuggingFace 的哈希校验。
 - **云端 Provider，同一套接口。** OpenRouter 加 10 家厂商（见下表）。各家的差异，比如情绪指令放哪、语速范围、音频是 base64 / hex / 临时链接 / 分块返回，都由适配器处理。
 - **自定义 Provider。** 接入任何 OpenAI 兼容的语音服务：自己部署的 Kokoro-FastAPI、代理、vox 还没收录的厂商，或者另一台 vox。
-- **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`，网页上有「转写」页。模型支持时还能区分说话人、给出逐词时间戳。
+- **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、MOSS-Transcribe-Diarize、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`，网页上有「转写」页。模型支持时还能区分说话人、给出逐词时间戳；本地的 MOSS 能一次分出说话人和分句时间，适合会议、访谈、问诊录音。
 - **先听再选。** 音色库里每个音色都读同一段样本；试音台有对比模式：同一段文本、同一组语气 / 语速 / 种子，几个音色或模型排成清单，一键同时生成（先给费用预估）；想单独调其中一个，就基于它做变体，和原来的并排比较。
 
 | 音色库 | 模型与 Provider |
@@ -56,6 +56,7 @@ vox say "今天天气不错。" -m qwen3 -v serena -i "轻快友好" --seed 42 -
 vox say "Hello from vox." -m qwen3 -v ryan -o hello.mp3
 vox voices -m qwen3                       # 某个模型的音色
 vox models add qwen3-asr                  # 本地语音识别（Qwen3-ASR 0.6B，约 1 GB）
+vox models add moss                       # 本地识别并区分说话人（MOSS-Transcribe-Diarize 0.9B，约 1.3 GB）
 vox transcribe 会议.m4a -o 会议.txt        # 音频 / 视频 → 文字；-o 访谈.srt 导出字幕（需要带时间戳的模型）
 vox serve --open                          # 网页界面 + API
 ```

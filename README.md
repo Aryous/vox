@@ -16,7 +16,7 @@ English · [中文](README.zh-CN.md)
 - **Local models, offline.** Qwen3-TTS (CustomVoice and VoiceDesign, every size and quantization published by `mlx-community`) and Kokoro-82M (Chinese). Downloads are verified file by file against HuggingFace hashes.
 - **Cloud providers, same interface.** OpenRouter plus ten providers (list below). Per-provider quirks — where the emotion prompt goes, speed ranges, base64/hex/URL/chunked audio — are handled by adapters so you don't have to.
 - **Custom providers.** Plug in any OpenAI-compatible speech service: a self-hosted Kokoro-FastAPI, a proxy, a vendor vox doesn't know yet, or another vox.
-- **Speech-to-text, same model system.** `vox transcribe meeting.m4a` turns audio or video into text or subtitles (txt / srt / vtt / json) with local models (Qwen3-ASR, SenseVoice, Fun-ASR, Whisper — all through MLX) or cloud ones; OpenAI-compatible `POST /v1/audio/transcriptions`; a Transcribe page in the web UI. Speaker labels and word timestamps where the model supports them.
+- **Speech-to-text, same model system.** `vox transcribe meeting.m4a` turns audio or video into text or subtitles (txt / srt / vtt / json) with local models (Qwen3-ASR, MOSS-Transcribe-Diarize, SenseVoice, Fun-ASR, Whisper — all through MLX) or cloud ones; OpenAI-compatible `POST /v1/audio/transcriptions`; a Transcribe page in the web UI. Speaker labels and word timestamps where the model supports them — locally, MOSS labels speakers and sentence timings in one pass, good for meetings, interviews and doctor visits.
 - **Hear before you choose.** A voice library where every voice reads the same sample line; a playground with a compare mode: one text, one shared set of tone / speed / seed, and a list of voices or models generated side by side in one click (cost estimate first). Want to tweak one of them? Make a variant of it and compare the two.
 
 | Voice library | Models and providers |
@@ -56,6 +56,7 @@ vox say "Hello from vox." -m qwen3 -v ryan -o hello.mp3 --play
 vox say "今天天气不错。" -m qwen3 -v serena -i "cheerful" --seed 42 --play
 vox voices -m qwen3                       # voices of a model
 vox models add qwen3-asr                  # local speech-to-text (Qwen3-ASR 0.6B, ≈1 GB)
+vox models add moss                       # local speech-to-text with speaker labels (MOSS-Transcribe-Diarize 0.9B, ≈1.3 GB)
 vox transcribe meeting.m4a -o meeting.txt # audio / video → text; -o talk.srt for subtitles (needs a model with timestamps)
 vox serve --open                          # web UI + API
 ```

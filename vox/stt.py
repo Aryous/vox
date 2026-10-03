@@ -139,7 +139,7 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
                 wav = work / "in.wav"
                 dur = audio.to_wav16k(src, wav)
                 with hub.SYNTH_LOCK:   # MLX 不是线程安全的：和合成共用一把锁
-                    r = eng.transcribe(str(wav), req.get("language"), req.get("prompt"), req.get("hotwords"))
+                    r = eng.transcribe(str(wav), req.get("language"), req.get("prompt"), req.get("hotwords"), duration=dur)
             else:
                 dur = audio.duration(src)
                 up = audio.for_upload(src, m["compat"].get("formats"), m["compat"].get("max_mb"), work)
@@ -179,7 +179,7 @@ def records(limit: int | None = None) -> list[dict]:
         except ValueError:
             continue
         out.append({k: r.get(k) for k in ("id", "ts", "source", "file", "request", "language", "duration", "elapsed", "cost", "timed")}
-                   | {"preview": r.get("text", "")[:120], "speakers": len({s.get("speaker") for s in r.get("segments", []) if s.get("speaker")})})
+                   | {"preview": " ".join(r.get("text", "").split("\n"))[:120], "speakers": len({s.get("speaker") for s in r.get("segments", []) if s.get("speaker")})})
     out.sort(key=lambda r: r["ts"] or 0, reverse=True)
     return out[:limit] if limit else out
 
@@ -222,8 +222,15 @@ def render(rec: dict, fmt: str = "txt") -> str:
     if fmt == "json":
         return json.dumps(rec, ensure_ascii=False, indent=1)
     if fmt == "txt":
-        if any(s.get("speaker") for s in rec.get("segments", [])):   # 有说话人时按段落分行，便于阅读
-            return "\n".join(_line(s) for s in rec["segments"]) + "\n"
+        if any(s.get("speaker") for s in rec.get("segments", [])):   # 有说话人时一人一段：同一个人连着说的合成一行
+            turns = []
+            for s in rec["segments"]:
+                if turns and s.get("speaker") == turns[-1]["speaker"]:
+                    prev = turns[-1]["text"]
+                    turns[-1]["text"] = prev + (" " if prev[-1:].isascii() and s["text"][:1].isascii() else "") + s["text"]   # 中文直接接，英文补空格
+                else:
+                    turns.append({"speaker": s.get("speaker"), "text": s["text"]})
+            return "\n".join(_line(t) for t in turns) + "\n"
         return rec.get("text", "") + "\n"
     if fmt == "srt":
         return "\n".join(f"{i}\n{_ts(s['start'], ',')} --> {_ts(s['end'], ',')}\n{_line(s)}\n" for i, s in enumerate(_cues(rec), 1))

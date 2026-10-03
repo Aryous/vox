@@ -661,7 +661,7 @@ class STTTest(unittest.TestCase):
         calls = []
 
         class FakeASR:
-            def transcribe(self, wav, language=None, prompt=None, hotwords=None):
+            def transcribe(self, wav, language=None, prompt=None, hotwords=None, duration=None):
                 calls.append((wav, language, hotwords))
                 return {"text": "测试一下", "language": "zh", "segments": [{"start": 0, "end": 0.3, "text": "测试一下"}]}
 
@@ -687,6 +687,36 @@ class STTTest(unittest.TestCase):
         self.stt.delete(r1["id"])
         with self.assertRaises(hub.VoxError):
             self.stt.get(r1["id"])
+
+    def test_moss_prompt_and_speakers(self):
+        """MOSS：热词接在官方指令后面（不能把分说话人的指令换掉）；长音频放宽 token 上限；[S01] 标记整理成 speaker 字段。"""
+        from types import SimpleNamespace
+        from vox import engines
+        m = catalog.find_model("moss")
+        self.assertTrue(m["caps"]["diarize"] and m["caps"]["segments"] and m["caps"]["hotwords"])
+        seen = {}
+
+        class FakeMoss:
+            def generate(self, audio, *, max_tokens=2048, prompt=None, hotwords=None, **kw):
+                seen.update(max_tokens=max_tokens, prompt=prompt, hotwords=hotwords)
+                return SimpleNamespace(text="[0.3][S01]你好[1.0][1.2][S02]嗯。[1.5]", language=None, segments=[
+                    {"start": 0.3, "end": 1.0, "text": "[S01] 你好", "speaker_id": "S01"},
+                    {"start": 1.0, "end": 1.1, "text": "[S01] 大夫", "speaker_id": "S01"},
+                    {"start": 1.2, "end": 1.5, "text": "[S02] 嗯。", "speaker_id": "S02"}])
+
+        e = engines.MlxSTT(m["repo"]); e.spec = m; e._m = FakeMoss()
+        r = e.transcribe("x.wav", hotwords=["坦索罗辛", "加替沙星"], duration=60)
+        self.assertTrue(seen["prompt"].startswith(m["prompt_format"]["base"]))
+        self.assertTrue(seen["prompt"].endswith("热词提示：坦索罗辛, 加替沙星"))
+        self.assertIsNone(seen["hotwords"])                                      # 不走库的通用热词拼法
+        self.assertEqual(seen["max_tokens"], 60 * m["tokens_per_sec"] + 1024)
+        self.assertEqual(r["segments"][0], {"start": 0.3, "end": 1.0, "text": "你好", "speaker": "S01"})
+        self.assertEqual(r["text"], "你好\n大夫\n嗯。")
+        self.assertEqual(e.transcribe("x.wav")["segments"][2]["speaker"], "S02")
+        self.assertEqual(seen["prompt"], m["prompt_format"]["base"])             # 不给热词时就是官方指令本身
+        rec = {"text": r["text"], "segments": r["segments"], "timed": True, "request": {"model": m["id"]}}
+        self.assertEqual(self.stt.render(rec, "txt"), "[S01] 你好大夫\n[S02] 嗯。\n")   # 同一个人连着说的合成一行
+        self.assertIn("[S01] 大夫", self.stt.render(rec, "srt"))                 # 字幕仍按原来的分段
 
     def test_upload_transcode(self):
         src = TMP / "u.wav"; src.write_bytes(WAV)

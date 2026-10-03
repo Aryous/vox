@@ -28,6 +28,9 @@
   models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
                    recommended（连接后默认加进「我的模型」）/ about / languages …
   stt_models[]     语音识别模型，字段同上（没有音色）。单独成表：旧版 vox 拉到新注册表时只认 models，不会把识别模型当成合成模型
+                   本地识别模型另有两个可选字段：
+                   prompt_format   {"base", "hotwords"}：模型要求的指令写法（如 MOSS 的分说话人指令，热词按 "热词提示：{}" 接在后面）
+                   tokens_per_sec  每秒音频最多生成多少 token（一次读完整段的模型要按时长放宽上限，否则长音频会被截断）
   providers.<id>.stt   这家语音识别的配置：adapter / compat / model_defaults（缺省沿用这家的合成配置）
   voice_sets       可复用的静态音色表
 
