@@ -16,8 +16,9 @@ const store = {
 };
 const S = {
   models: [], voices: [], providers: [], status: null, cat: { instructions: [], design: [] }, settings: { sample_text: '', favorites: [] }, hist: [], clones: [], cn: { file: null, url: null, rec: null },
-  vf: (f => ({ ...f, model: f.model === 'my' ? 'preset' : f.model }))(store.get('vf', { q: '', model: 'all', gender: '', lang: '', fav: false })), vlimit: 60,   // 旧版的「my」= 现在的「预设」
-  slots: store.get('slots', null), compare: store.get('compare', false), text: store.get('text', QUICK[0]),
+  // 音色库筛选：kind = 全部 / 预置 / 预设 / 克隆；model = 某个模型或某家 Provider（p:<id>），只筛预置音色。旧版把两者混在 model 里（my = 预设）
+  vf: (f => { const k = { my: 'preset', preset: 'preset', clone: 'clone' }[f.model]; return { q: '', gender: '', lang: '', fav: false, ...f, kind: f.kind || k || 'all', model: k || ['all', 'ready'].includes(f.model) ? '' : f.model || '' }; })(store.get('vf', {})), vlimit: 60,
+  slots: store.get('slots', null), text: store.get('text', QUICK[0]), exAll: false,
   runs: [], feedStar: false, equiv: store.get('equiv', 'cli'), apiTab: 'curl', autoAsr: store.get('autoAsr', true),
 };
 
@@ -158,11 +159,11 @@ async function refreshModels() { S.models = await api('/api/models'); }
 async function refreshVoices() { [S.voices, S.clones] = await Promise.all([api('/api/voices'), api('/api/clones')]); }
 
 /* ---------- 路由 ---------- */
-const PAGES = { voices: pageVoices, playground: pagePlayground, transcribe: pageTranscribe, models: pageModels, api: pageApi };
+const PAGES = { voices: pageVoices, playground: pagePlayground, compare: pageCompare, transcribe: pageTranscribe, models: pageModels, api: pageApi };
 function route() {
   let [, r, sub] = location.hash.match(/^#\/(\w+)(?:\/([\w-]+))?/) || [];
   if (r === 'providers') { r = 'models'; history.replaceState(null, '', `#/models${sub ? '/' + sub : ''}`); } // 旧链接
-  if (r === 'voices' && ['clone', 'preset'].includes(sub)) { S.vf.model = sub; S.vf.lang = ''; store.set('vf', S.vf); history.replaceState(null, '', '#/voices'); }   // #/voices/clone 直达克隆
+  if (r === 'voices' && ['clone', 'preset', 'builtin'].includes(sub)) { S.vf.kind = sub; store.set('vf', S.vf); history.replaceState(null, '', '#/voices'); }   // #/voices/clone 直达克隆
   S.route = PAGES[r] ? r : 'voices'; S.sub = sub || (S.route === 'models' ? S.sub : null); render();
 }
 function render() {
@@ -177,92 +178,118 @@ function render() {
 window.addEventListener('hashchange', () => { route(); $('#main').focus({ preventScroll: true }); scrollTo(0, 0); });
 
 /* ============ 音色库 ============ */
-function filteredVoices(ignoreLang) {
-  const f = ignoreLang === true ? { ...S.vf, lang: '' } : S.vf, q = f.q.trim().toLowerCase();
-  const okModel = v => { const m = M(v.model); return f.model === 'all' || f.model === 'ready' || (['preset', 'clone'].includes(f.model) ? v.kind === f.model : f.model.startsWith('p:') ? m?.provider === f.model.slice(2) && v.kind === 'builtin' : v.model === f.model && v.kind === 'builtin'); };
-  return S.voices.filter(v => okModel(v)
-    && (!f.gender || v.gender === f.gender) && (!f.lang || v.lang === f.lang) && (!f.fav || S.settings.favorites.includes(v.ref))
-    && (!q || `${v.ref} ${v.name} ${v.description} ${v.lang}`.toLowerCase().includes(q)));
+// 语言代码（en-US、ar-EG……）显示成中文名；已经是中文的（北京话、多语言）原样显示
+const LANG_DN = (() => { try { return new Intl.DisplayNames(['zh-CN'], { type: 'language' }); } catch { return null; } })();
+const langName = l => { if (!l || !LANG_DN || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$/.test(l)) return l; try { return LANG_DN.of(l) || l; } catch { return l; } };
+const KINDS = [['all', '全部'], ['builtin', '预置'], ['preset', '预设'], ['clone', '克隆']];
+const KIND_TIP = { builtin: '模型或厂商自带的音色', preset: '音色 + 语气 + 语速 + 种子的组合，在试音台调好后保存', clone: '从一段录音得到的声音' };
+function filteredVoices(skip) {
+  const f = S.vf, q = f.q.trim().toLowerCase(), builtin = f.kind === 'all' || f.kind === 'builtin';
+  const okModel = v => { if (!f.model || !builtin) return true; const m = M(v.model); return v.kind === 'builtin' && (f.model.startsWith('p:') ? m?.provider === f.model.slice(2) : v.model === f.model); };
+  return S.voices.filter(v => (f.kind === 'all' || v.kind === f.kind) && okModel(v)
+    && (skip === 'lang' || !builtin || !f.lang || v.lang === f.lang) && (!builtin || !f.gender || v.gender === f.gender) && (!f.fav || S.settings.favorites.includes(v.ref))
+    && (!q || `${v.ref} ${v.name} ${v.description} ${v.lang} ${langName(v.lang)}`.toLowerCase().includes(q)));
 }
+const setVf = (main, patch) => { Object.assign(S.vf, patch); S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); };
 function pageVoices(main) {
-  const vs = filteredVoices(), f = S.vf, ms = mine().filter(m => m.caps.voices);
+  const vs = filteredVoices(), f = S.vf, ms = mine().filter(m => m.caps.voices), builtin = f.kind === 'all' || f.kind === 'builtin';
   const local = ms.filter(m => m.provider === 'local'), provs = [...new Set(ms.filter(m => m.provider !== 'local').map(m => m.provider))];
-  const langs = [...new Set(filteredVoices(true).map(v => v.lang).filter(Boolean))].slice(0, 14);
-  const nMy = S.voices.filter(v => v.kind === 'preset').length, nClone = S.clones.length, nPreset = S.voices.filter(v => v.kind === 'builtin').length;
+  const n = { all: S.voices.length, builtin: S.voices.filter(v => v.kind === 'builtin').length, preset: S.voices.filter(v => v.kind === 'preset').length, clone: S.clones.length };
+  const langs = Object.entries(filteredVoices('lang').reduce((a, v) => (v.lang && v.kind === 'builtin' && (a[v.lang] = (a[v.lang] || 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
   const cloudOff = S.providers.filter(p => p.kind === 'cloud' && !p.connected).length;
   main.innerHTML = `
-    <div class="head"><div><h1>音色库</h1><p>${nPreset} 个音色，来自我的 ${ms.length} 个模型，都读同一段样本。${cloudOff ? `<a href="#/models/openrouter">连接云端 Provider</a> 能听到更多。` : ''}</p></div>
-      <div class="head-a"><button class="btn primary" type="button" id="toClone">${ic('mic', 15)}克隆声音</button><button class="cli" type="button" data-copy="vox voices --json">vox voices --json</button></div></div>
-    <div class="sampleline" id="sampleLine"><span class="lbl-i">样本文本</span><q>${esc(S.settings.sample_text)}</q><button class="btn ghost sm" type="button" id="editSample">修改</button></div>
-    <div class="filters">
-      <label class="search">${ic('search', 15)}<input class="in" id="vq" placeholder="搜索名字、描述、音色 ID" value="${esc(f.q)}" aria-label="搜索音色"></label>
-      <div class="seg" role="group" aria-label="音色类型">
-        <button type="button" data-fm="all" class="${!['preset', 'clone'].includes(f.model) ? 'on' : ''}">全部</button>
-        <button type="button" data-fm="preset" class="${f.model === 'preset' ? 'on' : ''}" title="音色 + 语气 + 语速 + 种子的组合，在试音台调好后保存">预设${nMy ? ` <span class="n">${nMy}</span>` : ''}</button>
-        <button type="button" data-fm="clone" class="${f.model === 'clone' ? 'on' : ''}" title="从一段录音得到的声音">克隆${nClone ? ` <span class="n">${nClone}</span>` : ''}</button>
-      </div>
+    <div class="head"><div><h1>音色库</h1><p>${n.builtin} 个预置音色，来自我的 ${ms.length} 个模型；试听时都读同一段样本。${cloudOff ? `<a href="#/models/openrouter">连接云端 Provider</a> 能听到更多。` : ''}</p></div>
+      <div class="head-a"><button class="cli" type="button" data-copy="vox voices --json">vox voices --json</button><button class="btn primary" type="button" id="toClone">${ic('mic', 15)}克隆声音</button></div></div>
+    <div class="vbar">
+      <div class="tabs" role="tablist" aria-label="音色类型">${KINDS.map(([k, t]) => `<button type="button" role="tab" data-fk="${k}" aria-selected="${f.kind === k}" class="${f.kind === k ? 'on' : ''}" ${KIND_TIP[k] ? `title="${KIND_TIP[k]}"` : ''}>${t}<span class="n">${n[k]}</span></button>`).join('')}</div>
+      <label class="search">${ic('search', 15)}<input class="in" id="vq" type="search" placeholder="搜索名字、描述、音色 ID" value="${esc(f.q)}" aria-label="搜索音色"></label>
+    </div>
+    ${builtin ? `<div class="filters">
       <select class="in sel" id="fprov" aria-label="按模型筛选"><option value="">所有模型</option>
         ${local.length ? `<optgroup label="本地">${local.map(m => `<option value="${m.id}" ${f.model === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
         ${provs.map(pid => `<optgroup label="${esc(PV(pid)?.name || pid)}"><option value="p:${pid}" ${f.model === 'p:' + pid ? 'selected' : ''}>${esc(PV(pid)?.name || pid)} 全部</option>${ms.filter(m => m.provider === pid).map(m => `<option value="${m.id}" ${f.model === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>`).join('')}</select>
-      <div class="seg" role="group" aria-label="按性别筛选">${[['', '不限'], ['女', '女声'], ['男', '男声']].map(([k, t]) => `<button type="button" data-fg="${k}" class="${f.gender === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      ${langs.length > 1 ? `<select class="in sel" id="flang" aria-label="按语言筛选"><option value="">所有语言</option>${langs.map(([l, c]) => `<option value="${esc(l)}" ${f.lang === l ? 'selected' : ''}>${esc(langName(l))}　${c}</option>`).join('')}</select>` : ''}
+      <div class="seg" role="group" aria-label="按性别筛选">${[['', '不限'], ['女', '女声'], ['男', '男声']].map(([k, t]) => `<button type="button" data-fg="${k}" class="${f.gender === k ? 'on' : ''}" aria-pressed="${f.gender === k}">${t}</button>`).join('')}</div>
       <button type="button" class="chip fav ${f.fav ? 'on' : ''}" id="ffav" aria-pressed="${f.fav}">${ic('star', 13)}收藏 <span class="n">${S.settings.favorites.length}</span></button>
-    </div>
-    ${langs.length > 1 ? `<div class="chips langs"><button class="chip ${!f.lang ? 'on' : ''}" data-fl="">所有语言</button>${langs.map(l => `<button class="chip ${f.lang === l ? 'on' : ''}" data-fl="${esc(l)}">${esc(l)}</button>`).join('')}</div>` : ''}
-    ${f.model === 'clone' ? `<div id="cloneNew">${cloneForm()}</div>` : ''}
+      ${f.model || f.lang || f.gender || f.fav || f.q ? '<button type="button" class="linkbtn" id="fclear">清除筛选</button>' : ''}
+    </div>` : ''}
+    ${builtin ? `<p class="sampleline" id="sampleLine">${ic('wave', 14)}<span>样本文本</span><q>${esc(S.settings.sample_text)}</q><button class="linkbtn" type="button" id="editSample">修改</button></p>` : ''}
     <div class="grid" id="vgrid"></div>
     <div class="more" id="more"></div>`;
-  const grid = $('#vgrid', main);
-  if (!vs.length) grid.outerHTML = f.model === 'preset' ? '<div class="empty"><b>还没有预设</b>在试音台调好音色、语气、语速后，点「存为预设」，就会出现在这里。</div>'
-    : f.model === 'clone' ? ''
-    : S.voices.length ? '<div class="empty"><b>没有符合条件的音色</b>换个筛选条件试试。</div>'
+  const grid = $('#vgrid', main), newTile = `<button class="vc vc-new" type="button" data-newclone>${ic('plus', 20)}<b>克隆一个新声音</b><span>上传或直接录一段 10–20 秒的录音</span></button>`;
+  if (f.kind === 'clone') grid.innerHTML = vs.length || f.q || f.fav ? newTile + vs.slice(0, S.vlimit).map(voiceCard).join('') : '';
+  if (f.kind === 'clone' && !S.clones.length) grid.outerHTML = `<div class="empty big">${ic('mic', 28)}<b>还没有克隆音色</b>上传或直接录一段 10–20 秒的录音（一个人说话、没有背景音乐），就能用这个声音说任何话。<br>录音存在本机；用本地模型时完全不出电脑。<div class="empty-a"><button class="btn primary" type="button" data-newclone>${ic('mic', 15)}克隆声音</button></div></div>`;
+  else if (f.kind !== 'clone' && !vs.length) grid.outerHTML = f.kind === 'preset' && !f.q && !f.fav ? `<div class="empty big">${ic('layers', 28)}<b>还没有预设</b>在试音台调好音色、语气、语速后，点「存为预设」，就会出现在这里。<div class="empty-a"><a class="btn" href="#/playground">去试音台</a></div></div>`
+    : S.voices.length ? `<div class="empty"><b>没有符合条件的音色</b>换个筛选条件试试。<div class="empty-a"><button class="btn" type="button" id="fclear2">清除筛选</button></div></div>`
     : '<div class="empty"><b>还没有能用的模型</b>去<a href="#/models/local">下载一个本地模型</a>，或<a href="#/models/openrouter">连接云端 Provider</a>。</div>';
-  else grid.innerHTML = vs.slice(0, S.vlimit).map(voiceCard).join('');
-  if (vs.length > S.vlimit) $('#more', main).innerHTML = `<button class="btn" type="button" id="moreBtn">再显示 ${Math.min(60, vs.length - S.vlimit)} 个（共 ${vs.length}）</button>`;
+  else if (f.kind !== 'clone') grid.innerHTML = vs.slice(0, S.vlimit).map(voiceCard).join('');
+  if (vs.length > S.vlimit) $('#more', main).innerHTML = `<button class="btn" type="button" id="moreBtn">再显示 ${Math.min(60, vs.length - S.vlimit)} 个<span class="n">共 ${vs.length}</span></button>`;
   bindVoices(main, vs);
 }
 function voiceCard(v) {
-  const m = M(v.model), ok = usable(m), fav = S.settings.favorites.includes(v.ref);
-  const tags = [v.gender ? `${v.gender}声` : '', v.lang, v.kind === 'preset' ? '预设' : '', v.kind === 'clone' ? '克隆' : '', v.kind === 'clone' && m ? m.name.replace(/（克隆）|（云端克隆）/, '') : ''].filter(Boolean);
-  const clone = v.kind === 'clone';
-  return `<article class="vc" style="--m:${hue(v.model)}" data-ref="${esc(v.ref)}" data-url="${esc(v.sample.url)}">
+  const m = M(v.model), ok = usable(m), fav = S.settings.favorites.includes(v.ref), clone = v.kind === 'clone';
+  const c = clone ? S.clones.find(x => 'clone:' + x.id === v.ref) : null;
+  const tags = clone ? [] : [v.kind === 'preset' ? '预设' : '', v.gender ? `${v.gender}声` : '', langName(v.lang)].filter(Boolean);
+  const mname = m ? m.name.replace(/（克隆）|（云端克隆）/, '') : '';
+  return `<article class="vc ${clone ? 'is-clone' : ''}" style="--m:${hue(v.model)}" data-ref="${esc(v.ref)}" data-url="${esc(v.sample.url)}">
     <div class="vc-top">
-      <button class="pb" type="button" data-sample="${esc(v.ref)}" data-url="${esc(v.sample.url)}" ${ok ? '' : 'disabled'} aria-label="试听 ${esc(v.name)}">${ic('play', 14)}</button>
-      <div class="vc-name"><b>${esc(v.name)}</b><code title="${clone ? `试听用 ${esc(m?.name || '')} 生成` : esc(m?.name || v.model)}">${esc(v.ref)}</code></div>
+      <button class="pb" type="button" data-sample="${esc(v.ref)}" data-url="${esc(v.sample.url)}" ${ok ? '' : 'disabled'} aria-label="试听 ${esc(v.name)}" title="${clone ? `用 ${esc(mname)} 读样本文本` : '试听样本'}">${ic('play', 14)}</button>
+      <div class="vc-name"><b>${esc(v.name)}</b><code>${esc(v.ref)}</code></div>
       <button class="star ${fav ? 'on' : ''}" type="button" data-fav="${esc(v.ref)}" aria-pressed="${fav}" aria-label="收藏 ${esc(v.name)}">${ic('star', 16)}</button>
     </div>
-    <p ${clone ? 'class="vc-text" title="录音的文字稿"' : ''}>${esc(v.description) || '<span class="mute">没有描述</span>'}</p>
+    ${clone ? `<p class="vc-text" title="录音的文字稿">${c?.text ? `「${esc(c.text)}」` : '<span class="mute">还没有文字稿：点「编辑」补上，克隆会更像</span>'}</p>
+      <div class="vc-meta">${c ? `<span>录音 ${Math.round(c.duration)} 秒</span>` : ''}${m ? `<span class="mtag"><i class="dot"></i>${esc(mname)}</span>` : ''}${c?.consent ? '<span>有同意声明</span>' : ''}</div>`
+      : `<p>${esc(v.description) || '<span class="mute">没有描述</span>'}</p>`}
     <canvas class="mini" data-url="${esc(v.sample.url)}" ${v.sample.cached ? '' : 'hidden'}></canvas>
     <div class="vc-foot">
-      <span class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>
-      ${clone ? `<button class="btn ghost sm" type="button" data-orig="${esc(v.ref.slice(6))}" title="播放原始录音">原声</button><button class="btn ghost sm" type="button" data-cedit="${esc(v.ref.slice(6))}">编辑</button>` : ''}
-      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音${ic('arrow', 13)}</a>` : clone && !m ? `<a class="btn sm" href="#/models/local" title="克隆需要一个支持克隆的模型">下载克隆模型</a>` : `<a class="btn sm" href="#/models/${m?.provider || 'local'}">${m ? '模型不可用' : '模型已移除'}</a>`}
+      ${clone ? `<button class="btn ghost sm" type="button" data-orig="${esc(v.ref.slice(6))}" title="播放原始录音">${ic('mic', 13)}原声</button><button class="btn ghost sm" type="button" data-cedit="${esc(v.ref.slice(6))}">${ic('edit', 13)}编辑</button>`
+        : `<span class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>`}
+      <span class="sp"></span>
+      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音${ic('arrow', 13)}</a>` : clone && !m ? `<a class="btn sm" href="#/models/local" title="克隆需要一个支持克隆的模型">下载克隆模型</a>` : `<a class="btn sm" href="#/models/${m?.provider || 'local'}">${m ? (m.provider === 'local' ? '去下载模型' : '去连接') : '模型已移除'}</a>`}
     </div></article>`;
 }
 function bindVoices(main, vs) {
   const vq = $('#vq', main); onText(vq, () => { S.vf.q = vq.value; store.set('vf', S.vf); S.vlimit = 60; pageVoices(main); const i = $('#vq', main); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 180);
-  $$('[data-fm]', main).forEach(b => b.onclick = () => { S.vf.model = b.dataset.fm; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); });
-  $('#fprov', main).onchange = e => { S.vf.model = e.target.value || 'all'; S.vf.lang = ''; S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); };
-  $$('[data-fg]', main).forEach(b => b.onclick = () => { S.vf.gender = b.dataset.fg; store.set('vf', S.vf); pageVoices(main); });
-  $$('[data-fl]', main).forEach(b => b.onclick = () => { S.vf.lang = b.dataset.fl; store.set('vf', S.vf); pageVoices(main); });
-  $('#ffav', main).onclick = () => { S.vf.fav = !S.vf.fav; store.set('vf', S.vf); pageVoices(main); };
+  $$('[data-fk]', main).forEach(b => b.onclick = () => setVf(main, { kind: b.dataset.fk }));
+  const fp = $('#fprov', main); if (fp) fp.onchange = e => setVf(main, { model: e.target.value, lang: '' });
+  const fl = $('#flang', main); if (fl) fl.onchange = e => setVf(main, { lang: e.target.value });
+  $$('[data-fg]', main).forEach(b => b.onclick = () => setVf(main, { gender: b.dataset.fg }));
+  const ff = $('#ffav', main); if (ff) ff.onclick = () => setVf(main, { fav: !S.vf.fav });
+  $$('#fclear, #fclear2', main).forEach(b => b.onclick = () => setVf(main, { model: '', lang: '', gender: '', fav: false, q: '' }));
   const more = $('#moreBtn', main); if (more) more.onclick = () => { S.vlimit += 60; pageVoices(main); };
   $$('[data-copy]', main).forEach(b => b.onclick = () => copy(b.dataset.copy, '已复制命令'));
   $$('[data-sample]', main).forEach(b => b.onclick = () => playSample(b.dataset.sample, b));
   $$('[data-fav]', main).forEach(b => b.onclick = () => toggleFav(b.dataset.fav, b));
   $$('[data-try]', main).forEach(a => a.onclick = () => tryVoice(a.dataset.try));
   $$('canvas.mini:not([hidden])', main).forEach(cv => drawWave(cv, cv.dataset.url));
-  $('#toClone', main).onclick = () => { S.vf.model = 'clone'; S.vf.lang = ''; store.set('vf', S.vf); pageVoices(main); $('#cloneNew', main)?.scrollIntoView({ block: 'nearest' }); };
-  $$('[data-orig]', main).forEach(b => b.onclick = () => { const c = S.clones.find(x => x.id === b.dataset.orig); if (c) play(c.sample + '?r=' + c.rev, { title: c.name, sub: `clone:${c.id} · 原始录音`, color: hue('clone') }); });
-  $$('[data-cedit]', main).forEach(b => b.onclick = () => editClone(b.dataset.cedit, main));
-  if (S.vf.model === 'clone') bindCloneForm(main);
-  $('#editSample', main).onclick = () => {
+  $$('#toClone, [data-newclone]', main).forEach(b => b.onclick = () => openCloneSheet(main));
+  $$('[data-orig]', main).forEach(b => b.onclick = () => playOrig(b.dataset.orig));
+  $$('[data-cedit]', main).forEach(b => b.onclick = () => openCloneSheet(main, b.dataset.cedit));
+  const es = $('#editSample', main); if (es) es.onclick = () => {
     const line = $('#sampleLine', main);
-    line.innerHTML = `<span class="lbl-i">样本文本</span><input class="in" id="sampleIn" value="${esc(S.settings.sample_text)}"><button class="btn primary sm" type="button" id="saveSample">保存</button><button class="btn ghost sm" type="button" id="cancelSample">取消</button><span style="width:100%;font-size:12px;color:var(--mute)">{name} 会替换成音色名字。改动后，样本在下次试听时按新文本重新生成。</span>`;
-    $('#sampleIn', line).focus();
+    line.classList.add('editing');
+    line.innerHTML = `<input class="in" id="sampleIn" value="${esc(S.settings.sample_text)}" aria-label="样本文本"><button class="btn primary sm" type="button" id="saveSample">保存</button><button class="btn ghost sm" type="button" id="cancelSample">取消</button><span class="note">{name} 会替换成音色名字。改动后，样本在下次试听时按新文本重新生成。</span>`;
+    const si = $('#sampleIn', line); si.focus(); si.select();
     $('#cancelSample', line).onclick = () => pageVoices(main);
-    $('#saveSample', line).onclick = async () => { S.settings = await api('/api/settings', { sample_text: $('#sampleIn', line).value.trim() }); await refreshVoices(); pageVoices(main); toast('样本文本已更新'); };
+    const save = async () => { S.settings = await api('/api/settings', { sample_text: si.value.trim() }); await refreshVoices(); pageVoices(main); toast('样本文本已更新'); };
+    $('#saveSample', line).onclick = save;
+    si.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) save(); if (e.key === 'Escape') pageVoices(main); };
   };
 }
+const playOrig = id => { const c = S.clones.find(x => x.id === id); if (c) play(c.sample + '?r=' + c.rev, { title: c.name, sub: `clone:${c.id} · 原始录音`, color: hue('clone') }); };
+
+/* ---------- 侧边面板（克隆音色的新建与编辑） ---------- */
+const SHEET = $('#sheet');
+function openSheet(html, onClose) {
+  SHEET.innerHTML = html; SHEET._onClose = onClose;
+  if (!SHEET.open) SHEET.showModal();
+  return SHEET;
+}
+function closeSheet() { if (SHEET.open) SHEET.close(); }
+SHEET.addEventListener('close', () => { const f = SHEET._onClose; SHEET._onClose = null; SHEET.innerHTML = ''; f?.(); });
+SHEET.addEventListener('click', e => { if (e.target === SHEET) closeSheet(); });   // 点遮罩关闭
+const sheetHead = (title, sub) => `<header class="sh-h"><div><h2 id="shTitle">${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div><button class="btn ghost icon" type="button" data-shclose aria-label="关闭">${ic('x', 18)}</button></header>`;
+
 /* ---------- 克隆音色：上传或录一段声音 ---------- */
 /* 支持克隆的模型：本地在前；默认选能用的本地模型（不花钱、录音不出电脑） */
 const cloneModels = () => S.models.filter(m => isTTS(m) && m.caps.clone).sort((a, b) => (a.provider !== 'local') - (b.provider !== 'local'));
@@ -286,35 +313,51 @@ function consentBlock(m, have) {
     <p class="note">请声音的主人本人逐字朗读下面这句并录下来，和上面的录音用同一支麦克风、在同一个环境里录。</p>
     <q class="consent">${esc(ph.zh)}</q><input type="file" accept="audio/*" class="in" data-consent></div>`;
 }
+const cloneNoteAll = '换模型不用重录：这个声音以后在任何支持克隆的模型上都能用，这里选的是试听和默认用的那个。';
 function cloneForm() {
   const c = S.cn, f = c.file;
   if (!c.model || !M(c.model)) c.model = cloneDefault();
   const cm = M(c.model);
-  return `<section class="clone-new">
-    <div class="cn-h"><b>克隆一个声音</b><span>一段 10–20 秒的录音：一个人说话、没有背景音乐。录音存在本机；用云端模型说话时，才会上传给那一家。</span></div>
-    <div class="cn-src">
-      <label class="drop ${f ? 'has' : ''}" id="cnDrop"><input type="file" id="cnFile" accept="audio/*,video/*" hidden>
-        <span class="drop-ic">${ic(f ? 'wave' : 'upload', 22)}</span>
-        ${f ? `<span class="drop-t"><b>${esc(f.name)}</b><span>${(f.size / 1e6).toFixed(1)} MB · 点这里换一个</span></span>` : '<span class="drop-t"><b>拖入录音，或点这里选择</b><span>m4a、mp3、wav、mp4……ffmpeg 能读的都行</span></span>'}</label>
-      <button class="btn ${c.rec ? 'danger' : ''}" type="button" id="cnRec">${ic('mic', 15)}${c.rec ? `停止 <span id="cnT">0:00</span>` : '直接录音'}</button>
+  return `${sheetHead('克隆一个声音', '录音存在本机；只有用云端模型说话时，才会上传给那一家。')}
+    <div class="sh-b">
+      <section class="sh-sec"><h3><i>1</i>录音</h3>
+        <ul class="cn-tips"><li>10–20 秒</li><li>只有一个人说话</li><li>没有背景音乐和回声</li></ul>
+        <div class="cn-src">
+          <label class="drop ${f ? 'has' : ''}" id="cnDrop"><input type="file" id="cnFile" accept="audio/*,video/*" hidden>
+            <span class="drop-ic">${ic(f ? 'wave' : 'upload', 22)}</span>
+            ${f ? `<span class="drop-t"><b>${esc(f.name)}</b><span>${(f.size / 1e6).toFixed(1)} MB · 点这里换一个</span></span>` : '<span class="drop-t"><b>拖入录音，或点这里选择</b><span>m4a、mp3、wav、mp4……ffmpeg 能读的都行</span></span>'}</label>
+          <span class="cn-or">或</span>
+          <button class="btn ${c.rec ? 'rec' : ''}" type="button" id="cnRec">${c.rec ? `<i class="rec-dot"></i>停止 <span id="cnT" class="mono">0:00</span>` : `${ic('mic', 15)}直接录音`}</button>
+        </div>
+        ${c.url ? `<audio controls src="${c.url}" class="cn-audio"></audio>` : ''}
+      </section>
+      <section class="sh-sec"><h3><i>2</i>名字和文字稿</h3>
+        <div class="field"><div class="lbl"><span>名字</span></div><input class="in" id="cnName" value="${esc(c.name || '')}" placeholder="比如：我的声音"></div>
+        <div class="field"><div class="lbl"><span>文字稿</span><span class="key">录音里说了什么，可不填</span></div>
+          <textarea class="in" id="cnText" rows="3" placeholder="留空会用本地识别模型自动生成；有一字不差的文字稿，克隆会更像">${esc(c.text || '')}</textarea></div>
+      </section>
+      <section class="sh-sec"><h3><i>3</i>用哪个模型</h3>
+        <div class="field">${cloneModelSelect('cnModel', c.model)}<span class="note" id="cnModelNote">${cloneModelNote(cm)}</span><span class="note">${cloneNoteAll}</span></div>
+        ${consentBlock(cm, !!c.consent)}
+      </section>
     </div>
-    ${c.url ? `<audio controls src="${c.url}" class="cn-audio"></audio>` : ''}
-    <div class="field"><div class="lbl"><span>用哪个模型</span><span class="key">model</span></div>${cloneModelSelect('cnModel', c.model)}
-      <span class="note" id="cnModelNote">${cloneModelNote(cm)} 换模型不用重录：这个克隆音色以后在任何支持克隆的模型上都能用。</span></div>
-    <div class="cn-grid">
-      <div class="field"><div class="lbl"><span>名字</span></div><input class="in" id="cnName" value="${esc(c.name || '')}" placeholder="比如：我的声音"></div>
-      <div class="field wide"><div class="lbl"><span>文字稿</span><span class="key">录音里说了什么</span></div>
-        <textarea class="in" id="cnText" rows="2" placeholder="留空会用本地识别模型自动生成；有准确的文字稿，克隆会更像">${esc(c.text || '')}</textarea></div>
-    </div>
-    ${consentBlock(cm, !!c.consent)}
-    <label class="cn-ok"><input type="checkbox" id="cnOk" ${c.ok ? 'checked' : ''}> 这是我本人的声音，或我已得到声音主人的同意</label>
-    <div class="cn-a"><button class="btn primary" type="button" id="cnGo" ${f && c.ok && !c.busy ? '' : 'disabled'}>${c.busy ? '正在处理…' : '创建克隆音色'}</button><span class="note" id="cnHint">${!f ? '先选一段录音' : !c.ok ? '确认后才能创建' : ''}</span></div>
-  </section>`;
+    <footer class="sh-f">
+      <label class="cn-ok"><input type="checkbox" id="cnOk" ${c.ok ? 'checked' : ''}> 这是我本人的声音，或我已得到声音主人的同意</label>
+      <div class="sh-a"><span class="note" id="cnHint">${!f ? '先选一段录音' : !c.ok ? '勾选上面的确认后才能创建' : ''}</span><span class="sp"></span>
+        <button class="btn ghost" type="button" data-shclose>取消</button>
+        <button class="btn primary" type="button" id="cnGo" ${f && c.ok && !c.busy ? '' : 'disabled'}>${c.busy ? '<span class="spin"></span>正在处理…' : '创建克隆音色'}</button></div>
+    </footer>`;
+}
+function openCloneSheet(main, id) {
+  if (id) return editClone(id, main);
+  const stopRec = () => { if (S.cn.rec) { S.cn.discard = true; S.cn.rec.stop(); } };
+  openSheet(cloneForm(), stopRec);
+  bindCloneForm(main);
 }
 function bindCloneForm(main) {
-  const box = $('#cloneNew', main); if (!box) return;
-  const c = S.cn, redraw = () => { box.innerHTML = cloneForm(); bindCloneForm(main); };
+  const box = SHEET, c = S.cn, redraw = () => { const y = $('.sh-b', box)?.scrollTop; box.innerHTML = cloneForm(); bindCloneForm(main); if (y) $('.sh-b', box).scrollTop = y; };
   const pick = f => { if (c.url) URL.revokeObjectURL(c.url); Object.assign(c, { file: f, url: URL.createObjectURL(f), name: c.name || f.name.replace(/\.[^.]+$/, '') }); redraw(); };
+  $$('[data-shclose]', box).forEach(b => b.onclick = closeSheet);
   const inp = $('#cnFile', box), drop = $('#cnDrop', box);
   inp.onchange = () => inp.files[0] && pick(inp.files[0]);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
@@ -332,6 +375,7 @@ function bindCloneForm(main) {
       const r = c.rec = new MediaRecorder(stream);
       r.ondataavailable = e => chunks.push(e.data);
       r.onstop = () => { stream.getTracks().forEach(t => t.stop()); clearInterval(c.tick); c.rec = null;
+        if (c.discard) { c.discard = false; return; }   // 录音中关掉面板：丢弃这段
         const type = r.mimeType || 'audio/webm', f = new File(chunks, `录音-${new Date().toLocaleTimeString('zh-CN', { hour12: false }).replace(/:/g, '')}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type });
         pick(f); };
       r.start(); redraw();
@@ -352,37 +396,51 @@ function bindCloneForm(main) {
       if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
       if (c.url) URL.revokeObjectURL(c.url);
       S.cn = { file: null, url: null, rec: null, model: c.model };
-      await refreshVoices(); pageVoices(main);
+      closeSheet(); await refreshVoices(); S.vf.kind = 'clone'; store.set('vf', S.vf); if (S.route === 'voices') pageVoices(main);
       toast(j.text_auto ? `已创建「${j.name}」。文字稿是自动识别的，不准的话点「编辑」改一下` : `已创建「${j.name}」`, 5000);
     } catch (e) { c.busy = false; redraw(); toast(`创建失败：${e.message}`, 6000); }
   };
 }
 function editClone(id, main) {
-  const c = S.clones.find(x => x.id === id), card = $(`.vc[data-ref="${CSS.escape('clone:' + id)}"]`, main); if (!c || !card) return;
-  const p = $('.vc-text', card), foot = $('.vc-foot', card);
+  const c = S.clones.find(x => x.id === id); if (!c) return;
   const v = S.voices.find(x => x.ref === 'clone:' + id), cur = c.model && M(c.model) ? c.model : v?.model || cloneDefault();
-  p.outerHTML = `<div class="cn-edit"><input class="in" value="${esc(c.name)}" data-k="name" aria-label="名字">
-    ${cloneModelSelect('ceModel', cur)}<span class="note" data-k="mnote">${cloneModelNote(M(cur))}</span>
-    <textarea class="in" rows="3" data-k="text" aria-label="文字稿">${esc(c.text || '')}</textarea>
-    <span class="note">文字稿要和录音一字不差；改了之后，云端模型下次使用时会重新上传。</span>
-    <div data-k="consentBox">${consentBlock(M(cur), c.consent)}</div></div>`;
-  $('#ceModel', card).onchange = e => { const m = M(e.target.value); $('[data-k=mnote]', card).innerHTML = cloneModelNote(m); $('[data-k=consentBox]', card).innerHTML = consentBlock(m, c.consent); };
-  foot.innerHTML = `<button class="btn ghost sm danger" type="button" data-k="del">删除</button><span class="sp"></span><button class="btn ghost sm" type="button" data-k="cancel">取消</button><button class="btn primary sm" type="button" data-k="save">保存</button>`;
-  $('[data-k=cancel]', foot).onclick = () => pageVoices(main);
-  $('[data-k=save]', foot).onclick = async () => {
+  const box = openSheet(`${sheetHead(`编辑「${esc(c.name)}」`, `<code>clone:${esc(c.id)}</code> · 录音 ${Math.round(c.duration)} 秒${c.file ? ` · 来自 ${esc(c.file)}` : ''}`)}
+    <div class="sh-b">
+      <section class="sh-sec"><h3>原始录音</h3><audio controls src="${esc(c.sample)}?r=${esc(c.rev)}" class="cn-audio"></audio></section>
+      <section class="sh-sec">
+        <div class="field"><div class="lbl"><span>名字</span></div><input class="in" value="${esc(c.name)}" data-k="name"></div>
+        <div class="field"><div class="lbl"><span>文字稿</span><span class="key">${c.text_auto ? '自动识别的，请核对' : '录音里说了什么'}</span></div>
+          <textarea class="in" rows="4" data-k="text">${esc(c.text || '')}</textarea>
+          <span class="note">要和录音一字不差；改了之后，云端模型下次使用时会重新上传。</span></div>
+      </section>
+      <section class="sh-sec"><h3>用哪个模型</h3>
+        <div class="field">${cloneModelSelect('ceModel', cur)}<span class="note" data-k="mnote">${cloneModelNote(M(cur))}</span><span class="note">${cloneNoteAll}</span></div>
+        <div data-k="consentBox">${consentBlock(M(cur), c.consent)}</div>
+      </section>
+    </div>
+    <footer class="sh-f"><div class="sh-a"><button class="btn ghost danger" type="button" data-k="del">删除这个声音</button><span class="sp"></span>
+      <button class="btn ghost" type="button" data-shclose>取消</button><button class="btn primary" type="button" data-k="save">保存</button></div></footer>`);
+  $$('[data-shclose]', box).forEach(b => b.onclick = closeSheet);
+  $('#ceModel', box).onchange = e => { const m = M(e.target.value); $('[data-k=mnote]', box).innerHTML = cloneModelNote(m); $('[data-k=consentBox]', box).innerHTML = consentBlock(m, c.consent); };
+  $('[data-k=save]', box).onclick = async e => {
+    const b = e.currentTarget; b.disabled = true;
     try {
-      await api('/api/clones/update', { id, name: $('[data-k=name]', card).value, text: $('[data-k=text]', card).value, model: $('#ceModel', card).value });
-      const cf = $('[data-consent]', card)?.files[0];
+      await api('/api/clones/update', { id, name: $('[data-k=name]', box).value, text: $('[data-k=text]', box).value, model: $('#ceModel', box).value });
+      const cf = $('[data-consent]', box)?.files[0];
       if (cf) { const fd = new FormData(); fd.append('id', id); fd.append('consent', cf, cf.name); const r = await fetch('/api/clones/consent', { method: 'POST', body: fd }), j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); }
-      await refreshVoices(); pageVoices(main); toast('已保存');
+      closeSheet(); await refreshVoices(); if (S.route === 'voices') pageVoices(main); toast('已保存');
     }
-    catch (e) { toast(`保存失败：${e.message}`, 5000); }
+    catch (err) { b.disabled = false; toast(`保存失败：${err.message}`, 5000); }
   };
-  $('[data-k=del]', foot).onclick = async () => {
+  const del = $('[data-k=del]', box);
+  del.onclick = async () => {
     const up = Object.keys(c.remote || {});
-    if (!confirm(`删除克隆音色「${c.name}」？录音和文字稿会一起删掉${up.length ? `，并尝试删除在 ${up.join('、')} 注册的音色` : ''}。`)) return;
-    try { const r = await api('/api/clones/delete', { id }); await refreshVoices(); pageVoices(main); toast(r.remote_failed?.length ? `已删除；云端没删掉：${r.remote_failed.join('；')}` : '已删除', 5000); }
-    catch (e) { toast(`删除失败：${e.message}`, 5000); }
+    if (!del.classList.contains('armed')) {   // 删除录音：原地二次确认
+      del.classList.add('armed'); del.textContent = `确认删除？录音和文字稿会一起删掉${up.length ? `，并尝试删除在 ${up.join('、')} 注册的音色` : ''}`;
+      clearTimeout(del._t); del._t = setTimeout(() => { del.classList.remove('armed'); del.textContent = '删除这个声音'; }, 5000); return;
+    }
+    try { const r = await api('/api/clones/delete', { id }); closeSheet(); await refreshVoices(); if (S.route === 'voices') pageVoices(main); toast(r.remote_failed?.length ? `已删除；云端没删掉：${r.remote_failed.join('；')}` : '已删除', 5000); }
+    catch (err) { toast(`删除失败：${err.message}`, 5000); }
   };
 }
 async function playSample(ref, btn) {
@@ -420,7 +478,7 @@ function newSlot(p = {}) {
     seed: p.seed ?? Math.floor(Math.random() * 1e6), lang: p.lang || 'chinese', ...GEN_DEFAULT, ...Object.fromEntries(Object.keys(GEN_DEFAULT).filter(k => p[k] != null).map(k => [k, p[k]])) };
 }
 const slot = () => S.slots[0];   // 单路只有一组参数；对比模式的候选单独存（S.cands）
-const saveSlots = () => { store.set('slots', S.slots); store.set('compare', S.compare); };
+const saveSlots = () => store.set('slots', S.slots);
 const LETTER = i => String.fromCharCode(65 + i);
 
 function reqOf(s, text) {
@@ -451,101 +509,114 @@ function cmdOf(r, kind) {
 function pagePlayground(main) {
   ensureSlots();
   S.slots = [M(slot().model) ? slot() : newSlot()];
-  if (S.compare) return pageCompare(main);
   main.innerHTML = `
-    <div class="head"><div><h1>试音台</h1><p>写一句话，调好声音，生成。结果会记下完整参数，随时复现。</p></div>${modeSeg()}</div>
+    <div class="head"><div><h1>试音台</h1><p>写一句话，调好声音，生成。每条结果都记下完整参数，随时复现。想并排比较几个音色，用<a href="#/compare">对比</a>。</p></div></div>
     <div class="pg">
       <aside class="panel" id="panel" aria-label="参数"></aside>
-      <section>
-        <div class="compose">
-          <textarea class="in" id="text" aria-label="要合成的文本" placeholder="输入要合成的文字…">${esc(S.text)}</textarea>
-          <div class="chips">${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}">${esc(q.length > 16 ? q.slice(0, 16) + '…' : q)}</button>`).join('')}</div>
-          <div class="compose-bar"><span class="count" id="count"></span><span class="sp"></span><span class="count" id="hint"></span>
-            <button class="btn primary lg" type="button" id="gen">生成 <kbd>⌘↵</kbd></button></div>
+      <div class="compose">
+        <textarea class="in" id="text" aria-label="要合成的文本" placeholder="输入要合成的文字…">${esc(S.text)}</textarea>
+        <div class="compose-bar">
+          <div class="quick"><span>示例</span>${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}" title="${esc(q)}">${esc(q.length > 14 ? q.slice(0, 14) + '…' : q)}</button>`).join('')}</div>
+          <span class="sp"></span><span class="count" id="count"></span>
         </div>
+        <div class="compose-go"><span class="hint" id="hint"></span><span class="sp"></span>
+          <button class="btn primary lg" type="button" id="gen">${ic('play', 14)}生成 <kbd>⌘↵</kbd></button></div>
         <div class="equiv" id="equiv"></div>
-        <div class="feed-head"><h2>结果</h2><span class="sp"></span>
-          <label class="chip ${S.autoAsr ? 'on' : ''}" style="cursor:pointer"><input type="checkbox" id="autoAsr" ${S.autoAsr ? 'checked' : ''} hidden> 自动读音校对</label>
+      </div>
+      <section class="feed-wrap" aria-labelledby="feedTitle">
+        <div class="feed-head"><h2 id="feedTitle">结果</h2><span class="sp"></span>
+          <label class="switch" title="生成后用本地识别模型把音频转回文字，标出读错的字"><input type="checkbox" id="autoAsr" ${S.autoAsr ? 'checked' : ''}><i></i>自动校对读音</label>
           <button type="button" class="chip fav ${S.feedStar ? 'on' : ''}" id="feedStar" aria-pressed="${S.feedStar}">${ic('star', 13)}只看收藏</button></div>
         <div class="feed" id="feed"></div>
       </section>
     </div>`;
   const ta = $('#text', main);
   ta.oninput = () => { S.text = ta.value; store.set('text', S.text); updateCompose(main); };
-  $$('[data-quick]', main).forEach(b => b.onclick = () => { ta.value = S.text = QUICK[+b.dataset.quick]; store.set('text', S.text); updateCompose(main); });
-  bindModeSeg(main);
+  $$('[data-quick]', main).forEach(b => b.onclick = () => { ta.value = S.text = QUICK[+b.dataset.quick]; store.set('text', S.text); updateCompose(main); ta.focus(); });
   $('#gen', main).onclick = () => generate(main);
   ta.onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); generate(main); } };
-  $('#autoAsr', main).onchange = e => { S.autoAsr = e.target.checked; store.set('autoAsr', S.autoAsr); e.target.parentElement.classList.toggle('on', S.autoAsr); };
-  $('#feedStar', main).onclick = () => { S.feedStar = !S.feedStar; pagePlayground(main); };
+  $('#autoAsr', main).onchange = e => { S.autoAsr = e.target.checked; store.set('autoAsr', S.autoAsr); };
+  $('#feedStar', main).onclick = () => { S.feedStar = !S.feedStar; const b = $('#feedStar', main); b.classList.toggle('on', S.feedStar); b.setAttribute('aria-pressed', S.feedStar); renderFeed(main); };
   renderPanel(main); updateCompose(main); renderFeed(main);
   // 命令行、API 生成的结果也进同一份历史：每次进试音台重新取一次，不用刷新页面
-  api('/api/history?limit=80').then(h => { if (S.route !== 'playground' || S.compare || JSON.stringify(h.map(x => x.id)) === JSON.stringify(S.hist.map(x => x.id))) return; S.hist = h; renderFeed(main); }).catch(() => {});
+  api('/api/history?limit=80').then(h => { if (S.route !== 'playground' || JSON.stringify(h.map(x => x.id)) === JSON.stringify(S.hist.map(x => x.id))) return; S.hist = h; renderFeed(main); }).catch(() => {});
 }
 function updateCompose(main) {
   $('#count', main).textContent = `${[...S.text].length} 字`;
   const slots = [slot()], bad = slots.find(s => !usable(M(s.model)));
   const design = slots.find(s => M(s.model).caps.design && !s.instructions.trim());
   const bm = bad && M(bad.model), cloudBad = bm && bm.provider !== 'local';
-  const hint = !S.text.trim() ? '先输入文字' : bad ? (cloudBad ? `${PV(bm.provider)?.name || bm.provider} 还没连接` : `${bm.name} 还没下载`) : design ? '声音设计模型需要先写声音描述' : '';
+  const hint = !S.text.trim() ? '先输入文字' : bad ? (cloudBad ? `${PV(bm.provider)?.name || bm.provider} 还没连接` : `${bm.name} 还没下载`) : design ? '声音设计模型要先写声音描述' : '';
   const cost = !hint ? slots.map(s => estimateLocal(reqOf(s))).filter(Boolean) : [];
-  $('#hint', main).innerHTML = bad && S.text.trim() ? `${esc(hint)} · <a href="#/models/${cloudBad ? bm.provider : 'local'}">${cloudBad ? '去连接' : '去下载'}</a>` : hint ? esc(hint) : cost.length ? `预估 ${cost.map(esc).join(' + ')}` : '';
+  const m = M(slot().model), cold = !hint && m.provider === 'local' && m.status !== 'loaded';
+  $('#hint', main).innerHTML = bad && S.text.trim() ? `${esc(hint)} · <a href="#/models/${cloudBad ? bm.provider : 'local'}">${cloudBad ? '去连接' : '去下载'}</a>` : hint ? esc(hint)
+    : cost.length ? `预估 ${cost.map(esc).join(' + ')}` : cold ? '第一次生成要先加载模型，十几秒' : m.provider === 'local' ? '本机生成，免费' : '';
   $('#gen', main).disabled = !!hint;
   renderEquiv(main);
 }
 function renderEquiv(main) {
-  const r = reqOf(slot()), tabs = { cli: 'CLI', curl: 'cURL', python: 'Python（OpenAI SDK）' };
-  $('#equiv', main).innerHTML = `<div class="equiv-head"><span>等价调用</span>
-    <div class="seg">${Object.entries(tabs).map(([k, t]) => `<button type="button" data-eq="${k}" class="${S.equiv === k ? 'on' : ''}">${t}</button>`).join('')}</div><span class="sp"></span>
-    <button class="btn ghost sm" type="button" id="eqCopy">复制</button></div><pre>${esc(cmdOf(r, S.equiv))}</pre>`;
+  const r = reqOf(slot()), tabs = { cli: 'CLI', curl: 'cURL', python: 'Python' }, code = cmdOf(r, S.equiv);
+  $('#equiv', main).innerHTML = `<div class="equiv-head"><span title="同样的请求，在终端或代码里怎么写">等价调用</span>
+    <div class="seg sm">${Object.entries(tabs).map(([k, t]) => `<button type="button" data-eq="${k}" class="${S.equiv === k ? 'on' : ''}">${t}</button>`).join('')}</div><span class="sp"></span>
+    <button class="btn ghost sm" type="button" id="eqCopy">${ic('copy', 13)}复制</button></div><pre class="${S.equiv === 'cli' ? 'one' : ''}" title="${S.equiv === 'cli' ? esc(code) : ''}">${S.equiv === 'cli' ? '<span class="pr">$</span>' : ''}${esc(code)}</pre>`;
   $$('[data-eq]', main).forEach(b => b.onclick = () => { S.equiv = b.dataset.eq; store.set('equiv', S.equiv); renderEquiv(main); });
   $('#eqCopy', main).onclick = () => copy(cmdOf(reqOf(slot()), S.equiv), '已复制，可直接在终端或脚本里运行');
 }
+// 模型能力：只列支持的，和模型页同一种写法
+const CAP_T = m => isTTS(m) ? [['voices', '预置音色'], ['clone', '声音克隆'], ['instructions', m.instr_enum ? '情绪枚举' : '情绪指令'], ['design', '声音设计'], ['seed', '可复现']]
+  : [['segments', '分句时间戳'], ['words', '逐词时间戳'], ['diarize', '区分说话人'], ['hotwords', '热词'], ['prompt', '上下文提示']];
+const capsHtml = m => { const t = CAP_T(m).filter(([k]) => m.caps[k]); return t.length ? `<div class="caps">${t.map(([, x]) => `<span>${ic('check', 12)}${x}</span>`).join('')}</div>` : ''; };
+const EX_N = 6;
 function renderPanel(main) {
   const p = $('#panel', main), s = slot(), m = M(s.model), has = k => m.params.includes(k), c = m.caps;
   const vs = S.voices.filter(v => v.model === m.id && v.kind === 'builtin'), my = S.voices.filter(v => v.kind === 'preset');
   const cl = c.clone ? S.clones : [], curClone = cl.find(x => 'clone:' + x.id === s.voice);
-  const ex = m.instr_examples || (c.design ? S.cat.design : S.cat.instructions);
+  const ex = m.instr_examples || (c.design ? S.cat.design : S.cat.instructions), exShown = S.exAll || ex.length <= EX_N + 1 ? ex : ex.slice(0, EX_N);
+  const models = S.models.filter(x => isTTS(x) && (x.mine || x.id === m.id));
   p.style.setProperty('--m', hue(m.id));
   p.innerHTML = `
+    <div class="panel-h"><h2>声音</h2><span class="sp"></span>
+      ${my.length ? `<label class="pick-sel" title="载入一个保存过的预设：模型、音色、语气、语速、种子一起换">${ic('layers', 14)}<select id="pMy" aria-label="载入预设"><option value="">载入预设</option>${my.map(v => `<option value="${esc(v.ref)}">${esc(v.name)}</option>`).join('')}</select></label>` : ''}</div>
     <div class="field"><div class="lbl"><span>模型</span><span class="key">model</span></div>
-      <select class="in" id="pModel">${[...new Set(S.models.filter(x => isTTS(x) && (x.mine || x.id === m.id)).map(x => x.provider))].map(pid => `<optgroup label="${pid === 'local' ? '本地' : esc(PV(pid)?.name || pid)}">${S.models.filter(x => isTTS(x) && x.provider === pid && (x.mine || x.id === m.id)).map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.name)}${usable(x) ? '' : ` · ${STATUS[x.status]}`}</option>`).join('')}</optgroup>`).join('')}</select>
-      <div class="cap">${[['voices', '预置音色'], ['clone', '声音克隆'], ['instructions', '情绪指令'], ['design', '声音设计'], ['seed', '可复现']].map(([k, t]) => `<span class="${c[k] ? 'y' : 'n'}">${t}</span>`).join('')}</div>
+      <select class="in" id="pModel">${[...new Set(models.map(x => x.provider))].map(pid => `<optgroup label="${pid === 'local' ? '本地' : esc(PV(pid)?.name || pid)}">${models.filter(x => x.provider === pid).map(x => `<option value="${x.id}" ${x.id === m.id ? 'selected' : ''}>${esc(x.name)}${usable(x) ? '' : ` · ${STATUS[x.status]}`}</option>`).join('')}</optgroup>`).join('')}</select>
+      ${capsHtml(m)}
       ${usable(m) ? '' : m.provider !== 'local' ? `<div class="err">${esc(PV(m.provider)?.name || m.provider)} 还没连接。<a href="#/models/${m.provider}">去填 Key</a>，或运行 <code>vox keys set ${esc(m.key_env)}</code></div>` : `<div class="err">模型还没下载。<a href="#/models/local">去模型页下载</a>，或运行 <code>vox models add ${esc(short(m))}</code></div>`}
-      ${m.price ? `<span style="font-size:12px;color:var(--mute)">${m.provider === 'local' ? '' : '计费：' + priceText(m)}</span>` : ''}</div>
-    ${my.length ? `<div class="field"><div class="lbl"><span>从预设载入</span></div><select class="in" id="pMy"><option value="">选择…</option>${my.map(v => `<option value="${esc(v.ref)}">${esc(v.name)}</option>`).join('')}</select></div>` : ''}
+      ${m.price && m.provider !== 'local' ? `<span class="note">计费：${priceText(m)}</span>` : ''}</div>
     ${has('voice') ? `<div class="field"><div class="lbl"><span>音色</span><span class="key">voice</span></div>
-      ${vs.length || cl.length ? `<div class="vrow"><select class="in" id="pVoice">${(cl.length && vs.length ? `<optgroup label="预置音色">` : '') + vs.map(v => `<option value="${esc(v.voice)}" ${v.voice === s.voice ? 'selected' : ''}>${esc(v.name)}${v.gender ? ` · ${v.gender}` : ''}${v.lang && v.lang !== '中文' ? ` · ${esc(v.lang)}` : ''}</option>`).join('') + (cl.length && vs.length ? '</optgroup>' : '')}
+      ${vs.length || cl.length ? `<div class="vrow"><select class="in" id="pVoice">${(cl.length && vs.length ? `<optgroup label="预置音色">` : '') + vs.map(v => `<option value="${esc(v.voice)}" ${v.voice === s.voice ? 'selected' : ''}>${esc(v.name)}${v.gender ? ` · ${v.gender}` : ''}${v.lang && v.lang !== '中文' ? ` · ${esc(langName(v.lang))}` : ''}</option>`).join('') + (cl.length && vs.length ? '</optgroup>' : '')}
         ${cl.length ? `<optgroup label="克隆音色">${cl.map(x => `<option value="clone:${esc(x.id)}" ${'clone:' + x.id === s.voice ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>` : ''}</select>
       <button class="pb" type="button" id="pPreview" ${usable(m) || curClone ? '' : 'disabled'} title="${curClone ? '播放原始录音' : '试听这个音色的样本'}" aria-label="试听">${ic('play', 13)}</button></div>
-      <span style="font-size:12px;color:var(--mute)">${curClone ? `克隆音色 · 录音 ${Math.round(curClone.duration)} 秒${m.provider !== 'local' && !(curClone.remote || {})[m.clone?.per_model ? m.id : m.provider] && m.clone?.mode !== 'inline' ? ` · 第一次用会把录音上传给 ${esc(PV(m.provider)?.name || m.provider)}${m.clone?.fee ? `（${esc(m.compat.clone.fee)}）` : ''}` : ''}` : esc(vs.find(v => v.voice === s.voice)?.description || '')}</span>`
+      <span class="note">${curClone ? `克隆音色 · 录音 ${Math.round(curClone.duration)} 秒${m.provider !== 'local' && !(curClone.remote || {})[m.clone?.per_model ? m.id : m.provider] && m.clone?.mode !== 'inline' ? ` · 第一次用会把录音上传给 ${esc(PV(m.provider)?.name || m.provider)}${m.clone?.fee ? `（${esc(m.compat.clone.fee)}）` : ''}` : ''}` : esc(vs.find(v => v.voice === s.voice)?.description || '')}</span>`
       : `<div class="err">${c.clone ? `这个模型只能用克隆音色，还没有。<a href="#/voices/clone">去音色库克隆一个</a>` : '没有可用的音色'}</div>`}</div>` : ''}
     ${has('instructions') ? `<div class="field"><div class="lbl"><span>${c.design ? '声音描述（必填）' : '情绪 / 语气'}</span><span class="key">instructions</span></div>
       <textarea class="in" id="pInstr" rows="2" placeholder="${c.design ? '例如：三十岁左右的男声，温和真诚' : m.instr_enum ? '只能选下面的情绪之一' : m.provider === 'inworld' ? '必须用英文，例如 speak warmly and slowly' : '留空为自然语气；例如：轻快友好'}">${esc(s.instructions)}</textarea>
-      <div class="chips">${ex.map(t => `<button type="button" class="chip ${t === s.instructions ? 'on' : ''}" data-ex="${esc(t)}">${esc(t.length > 12 ? t.slice(0, 12) + '…' : t)}</button>`).join('')}</div></div>` : ''}
+      <div class="chips sm">${exShown.map(t => `<button type="button" class="chip ${t === s.instructions ? 'on' : ''}" data-ex="${esc(t)}" title="${esc(t)}">${esc(t.length > 12 ? t.slice(0, 12) + '…' : t)}</button>`).join('')}${exShown.length < ex.length ? `<button type="button" class="chip more-chip" id="exMore">还有 ${ex.length - exShown.length} 个</button>` : ''}</div></div>` : ''}
     <div class="field"><div class="lbl"><span>语速 <span class="val" id="vSpeed">${Number(s.speed).toFixed(2)}×</span></span><span class="key">speed</span></div>
-      <input type="range" id="pSpeed" min="0.5" max="2" step="0.05" value="${s.speed}" aria-label="语速"></div>
+      <input type="range" id="pSpeed" min="0.5" max="2" step="0.05" value="${s.speed}" aria-label="语速" list="speedTicks"><datalist id="speedTicks"><option value="1"></option></datalist></div>
     ${has('seed') ? `<div class="field"><div class="lbl"><span>随机种子</span><span class="key">seed</span></div>
       <div class="seedrow"><div class="seg"><button type="button" data-sm="random" class="${s.seedMode === 'random' ? 'on' : ''}">每次随机</button><button type="button" data-sm="fixed" class="${s.seedMode === 'fixed' ? 'on' : ''}">固定</button></div>
       ${s.seedMode === 'fixed' ? `<input class="in mono" type="number" id="pSeed" value="${s.seed}" min="0" aria-label="种子">` : ''}</div>
-      <span style="font-size:12px;color:var(--mute)">${s.seedMode === 'fixed' ? '同样的参数和种子，会生成同一版声音。' : '每次生成都会换一版，结果里会记下用了哪个种子。'}</span></div>` : ''}
-    ${has('lang') || has('temperature') ? `<details class="adv"><summary>更多设置</summary>
+      <span class="note">${s.seedMode === 'fixed' ? '同样的参数和种子，会生成同一版声音。' : '每次生成都换一版；结果里会记下用了哪个种子。'}</span></div>` : ''}
+    ${has('lang') || has('temperature') ? `<details class="adv" ${S.advOpen ? 'open' : ''}><summary>更多设置</summary>
       ${has('lang') ? `<div class="field"><div class="lbl"><span>语言</span><span class="key">lang</span></div><select class="in" id="pLang">${LANGS.map(l => `<option ${l === s.lang ? 'selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}
-      ${has('temperature') ? [['temperature', 0.1, 1.5, 0.05], ['top_p', 0.1, 1, 0.05], ['top_k', 1, 100, 1], ['repetition_penalty', 1, 1.5, 0.01]].map(([k, a, b, st]) => `<div class="field"><div class="lbl"><span>${k} <span class="val" data-v="${k}">${s[k]}</span></span></div><input type="range" data-gen="${k}" min="${a}" max="${b}" step="${st}" value="${s[k]}"></div>`).join('') + '<button class="btn ghost sm" type="button" id="genReset">恢复默认采样参数</button>' : ''}
+      ${has('temperature') ? [['temperature', 0.1, 1.5, 0.05], ['top_p', 0.1, 1, 0.05], ['top_k', 1, 100, 1], ['repetition_penalty', 1, 1.5, 0.01]].map(([k, a, b, st]) => `<div class="field"><div class="lbl"><span>${k} <span class="val" data-v="${k}">${s[k]}</span></span></div><input type="range" data-gen="${k}" min="${a}" max="${b}" step="${st}" value="${s[k]}" aria-label="${k}"></div>`).join('') + '<button class="btn ghost sm" type="button" id="genReset">恢复默认采样参数</button>' : ''}
     </details>` : ''}
-    <button class="btn" type="button" id="saveMy">存为预设</button>`;
+    <div class="panel-f"><button class="btn" type="button" id="saveMy">${ic('layers', 14)}存为预设</button><span class="note">下次在「载入预设」或音色库里一键用</span></div>`;
   const upd = () => { saveSlots(); updateCompose(main); };
-  const redraw = () => { saveSlots(); renderPanel(main); updateCompose(main); };
-  $('#pModel', p).onchange = e => { Object.assign(s, newSlot({ model: e.target.value })); redraw(); };
+  const redraw = () => { saveSlots(); const y = p.scrollTop; renderPanel(main); p.scrollTop = y; updateCompose(main); };
+  $('#pModel', p).onchange = e => { Object.assign(s, newSlot({ model: e.target.value })); S.exAll = false; redraw(); };
   const pmy = $('#pMy', p); if (pmy) pmy.onchange = e => { const v = S.voices.find(x => x.ref === e.target.value); if (v) { Object.assign(s, newSlot(v.request)); redraw(); toast(`已载入「${v.name}」`); } };
   const pv = $('#pVoice', p); if (pv) pv.onchange = e => { s.voice = e.target.value; redraw(); };
-  const pp = $('#pPreview', p); if (pp) pp.onclick = () => curClone ? play(curClone.sample + '?r=' + curClone.rev, { title: curClone.name, sub: `clone:${curClone.id} · 原始录音`, color: hue('clone') }) : playSample(`${short(m)}:${s.voice}`, pp);
+  const pp = $('#pPreview', p); if (pp) pp.onclick = () => curClone ? playOrig(curClone.id) : playSample(`${short(m)}:${s.voice}`, pp);
   const pi = $('#pInstr', p); if (pi) pi.oninput = e => { s.instructions = e.target.value; $$('[data-ex]', p).forEach(b => b.classList.toggle('on', b.dataset.ex === s.instructions)); upd(); };
   $$('[data-ex]', p).forEach(b => b.onclick = () => { s.instructions = s.instructions === b.dataset.ex ? '' : b.dataset.ex; pi.value = s.instructions; $$('[data-ex]', p).forEach(x => x.classList.toggle('on', x.dataset.ex === s.instructions)); upd(); });
+  const em = $('#exMore', p); if (em) em.onclick = () => { S.exAll = true; redraw(); };
   $('#pSpeed', p).oninput = e => { s.speed = +e.target.value; $('#vSpeed', p).textContent = s.speed.toFixed(2) + '×'; upd(); };
+  $('#pSpeed', p).ondblclick = e => { s.speed = 1; e.target.value = 1; $('#vSpeed', p).textContent = '1.00×'; upd(); };
   $$('[data-sm]', p).forEach(b => b.onclick = () => { s.seedMode = b.dataset.sm; redraw(); });
   const ps = $('#pSeed', p); if (ps) ps.oninput = e => { s.seed = +e.target.value; upd(); };
   const pl = $('#pLang', p); if (pl) pl.onchange = e => { s.lang = e.target.value; upd(); };
+  const adv = $('details.adv', p); if (adv) adv.ontoggle = () => S.advOpen = adv.open;
   $$('[data-gen]', p).forEach(r => r.oninput = () => { s[r.dataset.gen] = +r.value; $(`[data-v="${r.dataset.gen}"]`, p).textContent = r.value; upd(); });
   const gr = $('#genReset', p); if (gr) gr.onclick = () => { Object.assign(s, GEN_DEFAULT); redraw(); };
   $('#saveMy', p).onclick = () => savePreset(reqOf(s, ''), m);
@@ -581,7 +652,7 @@ function renderFeed(main) {
   const seen = new Set(S.runs.flatMap(r => r.takes.map(t => t.rec?.id)));
   const runs = [...S.runs, ...S.hist.filter(h => !seen.has(h.id)).slice(0, 40).map(h => ({ id: h.id, text: h.request.input, ts: h.ts * 1000, takes: [{ label: '', req: h.request, rec: h }] }))]
     .filter(r => !S.feedStar || r.takes.some(t => t.rec?.star));
-  feed.innerHTML = runs.length ? runs.map(runHtml).join('') : `<div class="empty"><b>${S.feedStar ? '还没有收藏的结果' : '还没有生成过'}</b>${S.feedStar ? '点结果上的「收藏」。' : '在上面输入一句话，按 ⌘↵ 生成；或者先去<a href="#/voices">音色库</a>挑一个声音。'}</div>`;
+  feed.innerHTML = runs.length ? runs.map(runHtml).join('') : `<div class="empty"><b>${S.feedStar ? '还没有收藏的结果' : '还没有生成过'}</b>${S.feedStar ? '点结果右下角的星标收藏。' : '在上面输入一句话，按 ⌘↵ 生成；或者先去<a href="#/voices">音色库</a>挑一个声音。命令行和 API 生成的结果也会出现在这里。'}</div>`;
   $$('canvas.wave', feed).forEach(cv => drawWave(cv, cv.dataset.url));
   feed.onclick = e => {
     const b = e.target.closest('[data-act]'); if (!b) return;
@@ -608,34 +679,39 @@ async function again(rec, main) {
   renderFeed(main);
 }
 function runHtml(run) {
-  const d = new Date(run.ts), time = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  return `<div class="run"><div class="run-text"><span>${esc(run.text)}</span><time>${time}</time></div><div class="takes">${run.takes.map(takeHtml).join('')}</div></div>`;
+  const d = new Date(run.ts), today = new Date().toDateString() === d.toDateString();
+  const time = `${today ? '' : `${d.getMonth() + 1}/${d.getDate()} `}${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return run.takes.map(t => takeHtml(t, run.text, time)).join('');
 }
-function takeHtml(t) {
-  const r = t.rec?.request || t.req, m = M(r.model), head = `<div class="take-h">${t.label ? `<b class="mono">${t.label}</b>` : ''}<span class="mtag">${m && m.provider !== 'local' ? pIcon(m.provider) : '<i class="dot"></i>'}${esc(m?.name || r.model)}</span>${r.voice ? `<b>${esc(voiceName(r.model, r.voice))}</b>` : ''}${r.instructions ? `<span class="instr">「${esc(r.instructions)}」</span>` : ''}</div>`;
-  if (t.err) return `<div class="take" style="--m:${hue(r.model)}">${head}<div class="err">生成失败：${esc(t.err)}</div></div>`;
-  if (!t.rec) return `<div class="take pending" style="--m:${hue(r.model)}">${head}<span>${esc(t.pending || '排队中…')}</span></div>`;
+function takeHtml(t, text, time) {
+  const r = t.rec?.request || t.req, m = M(r.model);
+  const who = `<div class="who">${r.voice ? `<b>${esc(voiceName(r.model, r.voice))}</b>` : m?.caps.design ? '<b>声音设计</b>' : ''}<span class="mtag">${m && m.provider !== 'local' ? pIcon(m.provider, 13) : '<i class="dot"></i>'}${esc(m?.name || r.model)}</span>${r.instructions ? `<span class="instr" title="${esc(r.instructions)}">「${esc(r.instructions)}」</span>` : ''}${r.speed && r.speed !== 1 ? `<span class="instr">${r.speed}×</span>` : ''}</div>`;
+  const head = `<div class="run-h"><p class="run-text">${esc(text)}</p><time>${time}</time></div>`;
+  if (t.err) return `<article class="run failed" style="--m:${hue(r.model)}">${head}${who}<div class="err">生成失败：${esc(t.err)}</div></article>`;
+  if (!t.rec) return `<article class="run pending" style="--m:${hue(r.model)}">${head}${who}<div class="run-w"><span class="pb busy" aria-hidden="true"></span><span class="run-p">${esc(t.pending || '排队中…')}</span></div></article>`;
   const h = t.rec, url = `/clips/${h.id}.wav`, rtf = h.elapsed / Math.max(h.dur, 0.01);
-  return `<div class="take" style="--m:${hue(r.model)}">${head}
-    <div class="take-w"><button class="pb" type="button" data-act="play" data-id="${h.id}" data-url="${url}" aria-label="播放">${ic('play', 13)}</button><canvas class="wave" data-url="${url}" data-id="${h.id}"></canvas></div>
-    <div class="meta"><span><b>${h.dur.toFixed(2)}s</b></span><span>合成 ${h.elapsed}s</span><span title="合成耗时 ÷ 音频时长，小于 1 表示比实时快">RTF ${rtf.toFixed(2)}</span>${r.speed ? `<span>${r.speed}×</span>` : ''}${r.seed != null ? `<span>种子 ${r.seed}</span>` : ''}${h.cached ? '<span>缓存</span>' : ''}${h.source && h.source !== 'webui' ? `<span>来自 ${esc(h.source)}</span>` : ''}${h.cost?.amount != null ? `<span title="${esc(h.cost.text)}">${h.cost.currency === 'CNY' ? '¥' : '$'}${h.cost.amount.toFixed(4)}</span>` : ''}${h.reproducible === false ? '<span title="这家 Provider 不支持种子，同样的参数再生成，结果可能略有不同">不支持种子</span>' : ''}</div>
-    <div class="asr" id="asr-${h.id}">${asrHtml(h)}</div>
-    <div class="acts">
-      <button class="btn ghost sm fav ${h.star ? 'on' : ''}" type="button" data-act="star" data-id="${h.id}" aria-pressed="${!!h.star}">${ic('star', 14)}${h.star ? '已收藏' : '收藏'}</button>
-      ${m && !m.params.includes('seed') ? `<button class="btn ghost sm" type="button" data-act="again" data-id="${h.id}" title="这个模型不支持种子：同样的参数再生成一条，结果会略有不同${m.provider !== 'local' ? '（会再次计费）' : ''}">${ic('refresh', 14)}再来一条</button>` : ''}
-      <button class="btn ghost sm" type="button" data-act="reuse" data-id="${h.id}">用这套参数</button>
-      <button class="btn ghost sm" type="button" data-act="save" data-id="${h.id}">存为预设</button>
-      ${h.asr ? '' : `<button class="btn ghost sm" type="button" data-act="asr" data-id="${h.id}">读音校对</button>`}
-      <button class="btn ghost sm" type="button" data-act="cmd" data-id="${h.id}">复制命令</button>
-      <a class="btn ghost sm" href="/clips/${h.id}.mp3" download="vox-${h.id}.mp3">下载 mp3</a>
-    </div></div>`;
+  const meta = [`合成 ${h.elapsed}s`, `<span title="合成耗时 ÷ 音频时长；小于 1 表示比实时快">RTF ${rtf.toFixed(2)}</span>`, r.seed != null ? `种子 ${r.seed}` : '', h.cached ? '缓存' : '',
+    h.source && h.source !== 'webui' ? `来自 ${esc(h.source === 'cli' ? '命令行' : h.source)}` : '', h.cost?.amount != null ? `<span title="${esc(h.cost.text)}">${money(h.cost.amount, h.cost.currency)}</span>` : '',
+    h.reproducible === false ? '<span title="这家 Provider 不支持种子，同样的参数再生成，结果可能略有不同">不支持种子</span>' : ''].filter(Boolean);
+  const canAgain = m && !m.params.includes('seed');
+  return `<article class="run" style="--m:${hue(r.model)}">${head}${who}
+    <div class="run-w"><button class="pb" type="button" data-act="play" data-id="${h.id}" data-url="${url}" aria-label="播放">${ic('play', 13)}</button><canvas class="wave" data-url="${url}" data-id="${h.id}"></canvas><span class="run-d">${h.dur.toFixed(1)}s</span></div>
+    <div class="run-f"><div class="meta">${meta.map(x => `<span>${x}</span>`).join('')}${asrBadge(h)}</div>
+      <div class="acts">
+        <button class="btn ghost sm" type="button" data-act="reuse" data-id="${h.id}" title="把这条的模型、音色、语气、语速和种子都填回左边">${ic('refresh', 13)}套用参数</button>
+        ${canAgain ? `<button class="btn ghost sm" type="button" data-act="again" data-id="${h.id}" title="这个模型不支持种子：同样的参数再生成一条，结果会略有不同${m.provider !== 'local' ? '（会再次计费）' : ''}">再来一条</button>` : ''}
+        <button class="btn ghost sm" type="button" data-act="save" data-id="${h.id}">${ic('layers', 13)}存为预设</button>
+        <span class="acts-sep"></span>
+        <button class="btn ghost icon fav ${h.star ? 'on' : ''}" type="button" data-act="star" data-id="${h.id}" aria-pressed="${!!h.star}" aria-label="${h.star ? '取消收藏' : '收藏'}" title="${h.star ? '取消收藏' : '收藏'}">${ic('star', 15)}</button>
+        <button class="btn ghost icon" type="button" data-act="cmd" data-id="${h.id}" aria-label="复制 CLI 命令" title="复制 CLI 命令">${ic('code', 15)}</button>
+        <a class="btn ghost icon" href="/clips/${h.id}.mp3" download="vox-${h.id}.mp3" aria-label="下载 mp3" title="下载 mp3">${ic('download', 15)}</a>
+      </div></div>
+    ${asrHtml(h)}</article>`;
 }
 /* ============ 试音台 · 对比 ============ */
 // 场景：同一段文本，候选之间只差音色或模型。语气、语速、种子默认都用「统一设置」，差别只来自被比较的那一项。
 // 听完想单独调某一个，就基于它做「变体」（B1、B2）：变体只记下和统一设置不同的参数，行上高亮标出。
 // 候选的 instructions / speed 为 null 表示跟随统一设置；声音设计模型的 instructions 是声音描述，永远属于候选自己。
-const modeSeg = () => `<div class="seg" role="group" aria-label="模式"><button type="button" data-mode="single" class="${S.compare ? '' : 'on'}">单路</button><button type="button" data-mode="compare" class="${S.compare ? 'on' : ''}">对比</button></div>`;
-function bindModeSeg(main) { $$('[data-mode]', main).forEach(b => b.onclick = () => { S.compare = b.dataset.mode === 'compare'; saveSlots(); pagePlayground(main); }); }
 const cid = () => Math.random().toString(36).slice(2, 8);
 const doneRes = o => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v?.rec));   // 只存生成好的；排队、生成中、失败都不跨刷新保留
 Object.assign(S, { cands: store.get('cands', null), cmpBase: store.get('cmpBase', null), cmpSeed: store.get('cmpSeed', Math.floor(Math.random() * 1e6)), cmpRes: doneRes(store.get('cmpRes', {})), cmpOpen: null, cmpPick: store.get('cmpPick', null), cmpPicker: false, cmpQ: '' });
@@ -722,7 +798,7 @@ async function runJob(main, job) {
   catch (e) { S.cmpRes[job.k] = { err: e.message }; if (job.autoplay) toast(`生成失败：${e.message}`, 5000); }
   GENQ.run.delete(job.k); saveCands();
   if (cold) { refreshModels(); refreshStatus(); }
-  const here = S.route === 'playground' && S.compare, rec = S.cmpRes[job.k].rec;
+  const here = S.route === 'compare', rec = S.cmpRes[job.k].rec;
   if (job.autoplay && here && rec) play(`/clips/${rec.id}.wav`, candMeta(job.c));
   pump(main);
 }
@@ -735,13 +811,13 @@ function playCand(main, c) {
 function genAll(main) { S.cands.filter(c => usable(M(c.model)) && !pending(candRes(c))).forEach(c => enqueue(main, c)); }
 
 function pageCompare(main) {
-  ensureCands();
+  ensureSlots(); ensureCands();
   const b = S.cmpBase, ex = S.cat.instructions;
   main.innerHTML = `
-    <div class="head"><div><h1>试音台</h1><p>同一段文本，一次比较多个音色或模型。先用同一组设置听一遍，再对想细调的候选做变体。</p></div>${modeSeg()}</div>
+    <div class="head"><div><h1>对比</h1><p>同一段文本，一次比较多个音色或模型。先用同一组设置听一遍，再对想细调的候选做变体；选中满意的，带回试音台继续调。</p></div></div>
     <div class="compose cmp-text">
       <textarea class="in" id="text" aria-label="要合成的文本" placeholder="输入所有候选共用的文本…">${esc(S.text)}</textarea>
-      <div class="compose-bar"><div class="chips">${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}">${esc(q.length > 16 ? q.slice(0, 16) + '…' : q)}</button>`).join('')}</div><span class="sp"></span><span class="count" id="count"></span></div>
+      <div class="compose-bar"><div class="quick"><span>示例</span>${QUICK.map((q, i) => `<button type="button" class="chip" data-quick="${i}" title="${esc(q)}">${esc(q.length > 14 ? q.slice(0, 14) + '…' : q)}</button>`).join('')}</div><span class="sp"></span><span class="count" id="count"></span></div>
     </div>
     <section class="sec cmp-base">
       <div class="sec-h"><h3>${ic('sliders', 15)}统一设置</h3><span class="note">所有候选都用这一组；候选单独改过的参数会在行上高亮</span></div>
@@ -767,7 +843,6 @@ function pageCompare(main) {
   const ta = $('#text', main);
   onText(ta, () => { S.text = ta.value; store.set('text', S.text); refreshRows(main); }, 150);
   $$('[data-quick]', main).forEach(x => x.onclick = () => { ta.value = S.text = QUICK[+x.dataset.quick]; store.set('text', S.text); refreshRows(main); });
-  bindModeSeg(main);
   const bi = $('#bIns', main), bexOn = () => $$('[data-bex]', main).forEach(x => x.classList.toggle('on', x.dataset.bex === b.instructions));
   onText(bi, () => { b.instructions = bi.value.trim(); bexOn(); saveCands(); refreshRows(main); }, 250);
   $$('[data-bex]', main).forEach(x => x.onclick = () => { b.instructions = b.instructions === x.dataset.bex ? '' : x.dataset.bex; bi.value = b.instructions; bexOn(); saveCands(); refreshRows(main); });
@@ -964,10 +1039,10 @@ function renderPickbar(main) {
   if (!c) { el.innerHTML = ''; return; }
   const r = candReq(c);
   el.innerHTML = `<div class="pickbar" style="--m:${hue(c.model)}">${ic('star', 16)}<div><b>选了 ${candTags()[c.id]} · ${esc(candLabel(c))}</b><span>${esc(M(c.model).name)}${r.instructions ? ` ·「${esc(r.instructions)}」` : ''}${r.speed ? ` · ${r.speed}×` : ''}${r.seed != null ? ` · 种子 ${r.seed}` : ''}</span></div><span class="sp"></span>
-    <button class="btn sm" type="button" id="pkCmd">${ic('copy', 14)}复制命令</button><button class="btn sm" type="button" id="pkSave">存为预设</button><button class="btn primary sm" type="button" id="pkSingle">在单路里继续调${ic('arrow', 13)}</button></div>`;
+    <button class="btn sm" type="button" id="pkCmd">${ic('copy', 14)}复制命令</button><button class="btn sm" type="button" id="pkSave">存为预设</button><button class="btn primary sm" type="button" id="pkSingle">在试音台继续调${ic('arrow', 13)}</button></div>`;
   $('#pkCmd', el).onclick = () => copy(cmdOf(r, 'cli'), '已复制 CLI 命令');
   $('#pkSave', el).onclick = () => savePreset({ ...r }, M(r.model));
-  $('#pkSingle', el).onclick = () => { Object.assign(slot(), newSlot(r), r.seed != null ? { seedMode: 'fixed', seed: r.seed } : {}); S.compare = false; saveSlots(); pagePlayground(main); scrollTo(0, 0); toast('已带上这个候选的全部参数（含种子）'); };
+  $('#pkSingle', el).onclick = () => { Object.assign(slot(), newSlot(r), r.seed != null ? { seedMode: 'fixed', seed: r.seed } : {}); saveSlots(); location.hash = '#/playground'; toast('已带上这个候选的全部参数（含种子）'); };
 }
 
 /* 读音校对：本地 ASR 转回文字，按字对齐，标出没读对的字 */
@@ -980,12 +1055,18 @@ function asrDiff(want, got) {
   while (i < n && j < m) { if (a[i] === b[j]) { hit[i++] = true; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++; }
   return { a, hit, score: n ? dp[0][0] / n : 1 };
 }
+// 读音校对：结果栏里一个分数；有读错的字才展开，标出错字和识别结果
+function asrBadge(h) {
+  if (h._asrBusy) return '<span class="asr-b">读音校对中…</span>';
+  if (!h.asr) return S.status?.asr ? `<button class="linkbtn" type="button" data-act="asr" data-id="${h.id}" title="用本地识别模型把音频转回文字，标出读错的字">校对读音</button>` : '';
+  const { score } = asrDiff(h.request.input, h.asr), cls = score > .97 ? 'ok' : score > .85 ? 'warn' : 'bad';
+  return `<span class="asr-b ${cls}" title="识别结果：${esc(h.asr)}">${cls === 'ok' ? ic('check', 12) : ''}读音 ${Math.round(score * 100)}%</span>`;
+}
 function asrHtml(h) {
-  if (h._asrBusy) return '<small>读音校对中…</small>';
-  if (!h.asr) return '';
-  const { a, hit, score } = asrDiff(h.request.input, h.asr), col = score > .97 ? 'var(--ok)' : score > .85 ? 'var(--warn)' : 'var(--bad)';
-  const misses = hit.filter(x => !x).length;
-  return `<span class="sc" style="color:${col}">读音 ${Math.round(score * 100)}%</span>${misses ? a.map((c, i) => hit[i] ? esc(c) : `<span class="x">${esc(c)}</span>`).join('') : '<span style="color:var(--text-2)">全部读对</span>'}<small>识别结果：${esc(h.asr)}</small>`;
+  if (!h.asr || h._asrBusy) return '';
+  const { a, hit } = asrDiff(h.request.input, h.asr);
+  if (hit.every(Boolean)) return '';
+  return `<div class="asr"><p>${a.map((c, i) => hit[i] ? esc(c) : `<span class="x">${esc(c)}</span>`).join('')}</p><small>识别结果：${esc(h.asr)}</small></div>`;
 }
 async function runAsr(id, main) {
   const h = S.hist.find(x => x.id === id) || S.runs.flatMap(r => r.takes).find(t => t.rec?.id === id)?.rec; if (!h) return;
@@ -1159,22 +1240,20 @@ function keyField(p, c, opt) {
       <button class="btn ${opt ? '' : 'primary'}" type="submit">${opt ? '保存' : c.configured ? '保存' : '连接'}</button>${c.configured ? '<button class="btn ghost" type="button" data-keycancel>取消</button>' : ''}</form>` : ''}</div>`;
 }
 function statusPill(m) {
-  return m.status === 'loaded' ? '<span class="pill loaded">已加载</span>' : m.status === 'downloading' ? '<span class="pill downloading">下载中</span>' : '';
+  return m.status === 'loaded' ? '<span class="pill loaded" title="已在内存中，生成不用等加载"><i></i>已加载</span>' : m.status === 'downloading' ? '<span class="pill downloading">下载中</span>' : '';
 }
 function modelRow(m) {
   const cloud = m.provider !== 'local';
   const params = m.params_b ? (m.params_b >= 1 ? `${m.params_b}B` : `${Math.round(m.params_b * 1000)}M`) : '';
   const facts = cloud ? [priceText(m) || (m.inferred ? '价格见官网' : ''), m.voice_count ? `${m.voice_count} 个音色` : '']
     : [[params, m.quant].filter(Boolean).join(' · '), m.size_gb ? `${m.size_gb} GB` : '', m.voice_count ? `${m.voice_count} 个音色` : '', m.downloads ? `${fmtN(m.downloads)} 次下载` : ''];
-  const caps = (isTTS(m) ? [['clone', '声音克隆'], ['instructions', m.instr_enum ? '情绪枚举' : '情绪指令'], ['design', '声音设计'], ['seed', '可复现']]
-    : [['segments', '分句时间戳'], ['words', '逐词时间戳'], ['diarize', '区分说话人'], ['hotwords', '热词'], ['prompt', '上下文提示']]).filter(([k]) => m.caps[k]).map(([, t]) => t);
-  const tags = [isTTS(m) ? '' : '<span class="tag stt">识别</span>', ...(m.tags || []).map(t => `<span class="tag mt">${esc(t)}</span>`), m.inferred ? '<span class="tag" title="vox 注册表里没有这个模型：请求格式与能力按同一家已核对的模型推断">能力推断</span>' : '', m.source === 'custom' && cloud ? '<span class="tag">手动添加</span>' : ''].join('');
+  const tags = [isTTS(m) ? '' : '<span class="tag stt">语音识别</span>', ...(m.tags || []).map(t => `<span class="tag mt">${esc(t)}</span>`), m.inferred ? '<span class="tag" title="vox 注册表里没有这个模型：请求格式与能力按同一家已核对的模型推断">能力推断</span>' : '', m.source === 'custom' && cloud ? '<span class="tag">手动添加</span>' : ''].join('');
   return `<div class="mrow ${m.mine ? 'is-mine' : ''}" style="--m:${hue(m.id)}">
     <div class="mr-main">
       <div class="mr-t"><b>${esc(m.name)}</b>${statusPill(m)}${tags}</div>
       <div class="mr-s"><button class="idc" type="button" data-copyid="${esc(m.id)}" title="复制模型 ID">${esc(m.id)}${ic('copy', 12)}</button>${facts.filter(Boolean).map(f => `<span>${f}</span>`).join('')}</div>
       ${m.about ? `<p class="mr-d">${esc(m.about)}</p>` : ''}
-      ${caps.length ? `<div class="mr-c">${caps.map(t => `<span>${ic('check', 12)}${t}</span>`).join('')}</div>` : ''}
+      ${capsHtml(m)}
     </div>
     <div class="mr-a">${rowActions(m)}</div></div>`;
 }
@@ -1182,10 +1261,10 @@ function rowActions(m) {
   const cloud = m.provider !== 'local', id = esc(m.id), p = PV(m.provider);
   if (m.status === 'downloading') return `<div class="dl"><span class="note" data-prog="${id}">下载中…</span><div class="bar"><i data-bar="${id}"></i></div></div>`;
   if (m.mine) {
-    const tryBtn = isTTS(m) ? `<a class="btn primary sm" href="#/playground" data-trym="${id}">试音</a>` : `<a class="btn primary sm" href="#/transcribe" data-tryt="${id}">转写</a>`;
-    if (cloud) return `${tryBtn}<button class="btn ghost sm" type="button" data-rm="${id}">移除</button>`;
-    return `${tryBtn}${m.status === 'loaded' ? `<button class="btn sm" type="button" data-unload="${id}">卸载</button>` : `<button class="btn sm" type="button" data-load="${id}" title="提前载入内存，第一次生成不用等">预加载</button>`}
-      <button class="btn ghost sm danger" type="button" data-rm="${id}" data-size="${m.size_gb || ''}">删除</button>`;
+    const tryBtn = isTTS(m) ? `<a class="btn sm" href="#/playground" data-trym="${id}">试音${ic('arrow', 13)}</a>` : `<a class="btn sm" href="#/transcribe" data-tryt="${id}">转写${ic('arrow', 13)}</a>`;
+    if (cloud) return `<button class="btn ghost sm" type="button" data-rm="${id}" title="移出我的模型（不影响账号）">移除</button>${tryBtn}`;
+    return `${m.status === 'loaded' ? `<button class="btn ghost sm" type="button" data-unload="${id}" title="从内存卸载，释放内存；下次用时再自动加载">卸载</button>` : `<button class="btn ghost sm" type="button" data-load="${id}" title="提前载入内存，第一次生成不用等">预加载</button>`}
+      <button class="btn ghost sm danger" type="button" data-rm="${id}" data-size="${m.size_gb || ''}" title="删除模型文件">删除</button>${tryBtn}`;
   }
   if (!cloud) return m.engine === 'kokoro' ? '<span class="note">首次合成时自动下载</span>' : `<button class="btn sm" type="button" data-add="${id}">${ic('download', 14)}下载${m.size_gb ? ` ${m.size_gb} GB` : ''}</button>`;
   return `<button class="btn sm" type="button" data-add="${id}" ${p?.connected ? '' : 'disabled title="先连接（填 Key）"'}>${ic('plus', 14)}添加</button>`;
@@ -1299,7 +1378,7 @@ function txModel() {
 function pageTranscribe(main) {
   const ready = mineSTT().some(usable);   // 一个能用的都没有（包括还在下载）：显示下载入口或下载进度
   main.innerHTML = `
-    <div class="head"><div><h1>转写</h1><p>把录音、视频转成文字或字幕。本地模型在这台 Mac 上识别，文件不离开本机；选云端模型时，文件会发给那家 Provider。</p></div></div>
+    <div class="head"><div><h1>转写</h1><p>把录音、视频转成文字或字幕。本地模型在这台 Mac 上识别，文件不离开本机；选云端模型时，文件会发给那家 Provider。</p></div><button class="cli" type="button" data-copy="vox transcribe 录音.m4a">vox transcribe</button></div>
     ${ready ? '' : txEmpty()}
     <section class="sec tx-in" ${ready ? '' : 'hidden'}>
       <label class="drop ${S.tx.file ? 'has' : ''}" id="txDrop">
@@ -1319,6 +1398,7 @@ function pageTranscribe(main) {
   drop.ondragleave = () => drop.classList.remove('over');
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) pickFile(f, main); };
   $('#txGo', main).onclick = () => runTranscribe(main);
+  $$('.head [data-copy]', main).forEach(b => b.onclick = () => copy(b.dataset.copy, '已复制命令'));
   bindTxEmpty(main);
   renderTxOpts(main); renderTxOut(main); loadTxList(main);
 }
@@ -1452,9 +1532,11 @@ async function loadTxList(main) {
   el.innerHTML = `<div class="sec-h"><h3>最近的转写</h3><span class="n">${rs.length}</span><span class="sp"></span><span class="note">和 vox transcripts 共享</span></div>
     <div class="tx-rows">${rs.map(r => `<div class="tx-row ${S.tx.rec?.id === r.id ? 'on' : ''}"><button class="tx-open" type="button" data-open="${r.id}"><b>${esc(r.file)}</b><span>${esc(r.preview || '（空）')}</span></button>
       <span class="note">${esc(M(r.request.model)?.name || r.request.model)} · ${r.duration ? clock(r.duration) : ''} · ${ago(r.ts)}</span>
-      <button class="btn ghost sm" type="button" data-del="${r.id}" aria-label="删除这条转写">${ic('x', 14)}</button></div>`).join('')}</div>`;
+      <button class="btn ghost sm danger" type="button" data-del="${r.id}" aria-label="删除这条转写" title="删除这条转写">${ic('x', 14)}</button></div>`).join('')}</div>`;
   $$('[data-open]', el).forEach(b => b.onclick = async () => { S.tx.rec = await api(`/api/transcripts/${b.dataset.open}`); S.tx.err = null; renderTxOut(main); loadTxList(main); $('#txOut', main).scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
-  $$('[data-del]', el).forEach(b => b.onclick = async () => { await api('/api/transcripts/delete', { id: b.dataset.del }); if (S.tx.rec?.id === b.dataset.del) S.tx.rec = null; S.tx.list = null; renderTxOut(main); loadTxList(main); toast('已删除'); });
+  $$('[data-del]', el).forEach(b => b.onclick = async () => {
+    if (!b.classList.contains('armed')) { b.classList.add('armed'); b.innerHTML = '确认删除'; clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('armed'); b.innerHTML = ic('x', 14); }, 4000); return; }
+    await api('/api/transcripts/delete', { id: b.dataset.del }); if (S.tx.rec?.id === b.dataset.del) S.tx.rec = null; S.tx.list = null; renderTxOut(main); loadTxList(main); toast('已删除'); });
 }
 
 function pageApi(main) {

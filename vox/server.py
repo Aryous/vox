@@ -189,7 +189,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_error(404)
             f = audio.convert(f, m[3])
             return self._file(f, audio.FORMATS[m[3]], {"Content-Disposition": f'inline; filename="vox-{m[2]}.{m[3]}"'})
-        if p in ("/voices", "/playground", "/transcribe", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
+        if p in ("/voices", "/playground", "/compare", "/transcribe", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
             self.path = "/index.html"
         self._static = True
         return super().do_GET()
