@@ -3,7 +3,7 @@
 拦截每个适配器的 http()，按各家官方文档的请求 / 响应格式造数据，检查：
   1. 请求：URL、认证头、请求体字段名（文本、音色、指令、语速、种子）是否与官方文档一致
   2. 响应：裸字节 / base64 / hex / 临时 URL / 分块流 能否解析并最终落成可播放的 wav
-  3. 模型清单：在线发现（各家列表接口、OpenRouter、HuggingFace）、我的模型的添加 / 移除、注册表更新
+  3. 模型清单：在线发现（各家列表接口、OpenRouter、HuggingFace）、已添加模型的添加 / 移除、注册表更新
 运行：.venv/bin/python -m pytest tests -q   或   .venv/bin/python tests/test_providers.py
 """
 from __future__ import annotations
@@ -244,7 +244,7 @@ class DedicatedTest(unittest.TestCase):
 
 
 class ModelListTest(unittest.TestCase):
-    """Provider 与模型解耦：在线发现、我的模型（添加 / 移除）、注册表更新。"""
+    """Provider 与模型解耦：在线发现、已添加的模型（添加 / 移除）、注册表更新。"""
 
     def _discover(self, provider, *responses):
         fake = Fake(*responses)
@@ -352,7 +352,7 @@ class ModelListTest(unittest.TestCase):
         self.assertTrue(next(m for m in hub.models("minimax") if m["id"] == "minimax/speech-2.8-hd")["mine"])
         hub.remove_model("minimax/speech-2.8-hd")
         self.assertFalse(next(m for m in hub.models("minimax") if m["id"] == "minimax/speech-2.8-hd")["mine"])
-        self.assertFalse(any(v["model"] == "minimax/speech-2.8-hd" for v in hub.voices(with_samples=False)))   # 不在我的模型，不进音色库
+        self.assertFalse(any(v["model"] == "minimax/speech-2.8-hd" for v in hub.voices(with_samples=False)))   # 没添加，不进音色库
         hub.add_model("minimax/speech-2.8-hd")
         r = hub.add_model("minimax/speech-2.9-hd")                           # 列表接口查不到的，手动填模型 ID
         m = catalog.find_model(r["model"])

@@ -4,10 +4,10 @@
   clips/            合成结果 wav（按请求哈希命名）
   samples/          音色样本
   history.json      合成历史（CLI / WebUI / API 共享）
-  presets.json      我的预设（模型 + 音色 + 指令 + 种子的组合；旧版叫「我的音色」，存在 my_voices.json）
+  presets.json      预设（模型 + 音色 + 指令 + 种子的组合；旧版叫「我的音色」，存在 my_voices.json）
   clones/           克隆音色（参考录音 + 文字稿），见 clones.py
   settings.json     设置（样本文本等）
-  models.json       我的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
+  models.json       已添加的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
   models/           下载的本地模型（不进 Time Machine 备份）
 缓存（在线列表、云端音色列表、新版注册表）在 ~/Library/Caches/vox，删了会重新获取。
 """
@@ -57,14 +57,14 @@ def _save(p: Path, data):
 
 # ---------- 模型 ----------
 # 「能不能用」是系统事实：本地模型下没下载、云端 Provider 连没连上（有没有 Key），不让用户开关。
-# 「想不想用」是用户选择：我的模型 = 能用的模型里，用户留下的那些。
-#   本地：下载了就在「我的模型」里，移除即删除文件。
+# 「想不想用」是用户选择：已添加的模型 = 能用的模型里，用户留下的那些。
+#   本地：下载了就在已添加的模型里，移除即删除文件。
 #   云端：连接 Provider 后，默认带上注册表推荐的模型；用户可以从在线列表添加更多、手动填模型 ID，或移除。
 def model_or_raise(mid: str) -> dict:
     m = catalog.find_model(mid)
     if not m:
         mine = [x["id"] for x in catalog.MODELS if is_mine(x)]
-        raise VoxError(f"未知模型「{mid}」。我的模型：{', '.join(mine) or '（空）'}；全部可用模型见 vox models --all")
+        raise VoxError(f"未知模型「{mid}」。已添加的模型：{', '.join(mine) or '（空）'}；全部可用模型见 vox models --all")
     return m
 
 
@@ -137,7 +137,7 @@ def _set_saved(pid: str, ids: list[str]):
 
 
 def add_model(mid: str | None = None, provider: str | None = None, remote: str | None = None, name: str | None = None, task: str = "tts") -> dict:
-    """加进「我的模型」。本地模型 = 开始下载；云端已知模型 = 加入清单；云端未知模型 ID = 作为手动添加的条目登记（task 指明是合成还是识别模型）。"""
+    """添加模型。本地模型 = 开始下载；云端已知模型 = 加入清单；云端未知模型 ID = 作为手动添加的条目登记（task 指明是合成还是识别模型）。"""
     if task not in catalog.TASKS:
         raise VoxError(f"task 只能是 {' / '.join(catalog.TASKS)}")
     m = catalog.find_model(mid) if mid else None
@@ -175,7 +175,7 @@ def add_model(mid: str | None = None, provider: str | None = None, remote: str |
 
 
 def remove_model(mid: str, delete_files: bool = False) -> dict:
-    """移出「我的模型」。本地模型要删除已下载的文件，必须显式确认（delete_files）。"""
+    """移除模型。本地模型要删除已下载的文件，必须显式确认（delete_files）。"""
     m = model_or_raise(mid)
     if m["provider"] == "local":
         e = engines.get(m)
@@ -343,7 +343,7 @@ def _clone_rev(req: dict) -> str | None:
 
 
 def voices(model: str | None = None, lang: str | None = None, gender: str | None = None, q: str | None = None, with_samples=True) -> list[dict]:
-    """音色库：默认只列「我的模型」的音色；指定 model 时列这个模型的全部音色（添加前也能看）。"""
+    """音色库：默认只列已添加的模型的音色；指定 model 时列这个模型的全部音色（添加前也能看）。"""
     out = []
     target = catalog.find_model(model) if model else None
     if model and not target:
@@ -371,7 +371,7 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
         if model and m is not catalog.find_model(model):
             continue
         out.append({"ref": f"preset:{v['id']}", "model": v.get("model"), "voice": v.get("voice"), "name": v["name"], "gender": v.get("gender", ""), "lang": v.get("lang_label", ""),
-                    "description": v.get("instructions") or "我的预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
+                    "description": v.get("instructions") or "预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
     # 克隆音色不属于某个模型：指定了支持克隆的模型就挂在它下面，否则挂在它的首选模型下面（试听用）
     for c in clones.records() if not target or target["caps"].get("clone") else []:
         cm = target or _clone_model_of(c)
@@ -396,7 +396,7 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
 
 
 def resolve_voice(ref: str) -> dict:
-    """把音色引用展开成请求参数：qwen3:serena（预置音色）、preset:xxx（我的预设，旧写法 my:xxx）。
+    """把音色引用展开成请求参数：qwen3:serena（预置音色）、preset:xxx（预设，旧写法 my:xxx）。
     克隆音色 clone:xxx 不展开，原样留在 voice 里，合成时再换成各家需要的形式（见 _render）。"""
     if ref.startswith(("preset:", "my:")):
         pid = ref.split(":", 1)[1]
@@ -428,7 +428,7 @@ def sample(ref: str) -> dict:
 
 
 def presets() -> list[dict]:
-    """我的预设。旧版叫「我的音色」（my_voices.json），第一次读取时原样搬到 presets.json。"""
+    """预设。旧版叫「我的音色」（my_voices.json），第一次读取时原样搬到 presets.json。"""
     if not PRESETS.exists() and paths.MY_VOICES.exists():
         with FILE_LOCK:
             if not PRESETS.exists():
@@ -453,7 +453,7 @@ def delete_preset(vid: str):
 
 # ---------- 克隆音色 ----------
 def clone_model(required=True) -> dict | None:
-    """默认的克隆模型：设置里的 clone_model，否则「我的模型」里第一个能用的、支持克隆的模型（本地优先，不花钱）。"""
+    """默认的克隆模型：设置里的 clone_model，否则已添加的模型里第一个能用的、支持克隆的模型（本地优先，不花钱）。"""
     pick = catalog.find_model(settings().get("clone_model") or "")
     if pick and pick["caps"].get("clone") and usable(pick):
         return pick
@@ -800,7 +800,7 @@ def provider_save(pid: str, cfg: dict, key: str | None = None, overwrite: bool =
 
 
 def provider_remove(pid: str) -> dict:
-    """删除自定义 Provider：配置、我的模型里它的模型、在线列表缓存，以及凭证文件里它的 Key（环境变量里的不动）。"""
+    """删除自定义 Provider：配置、已添加的模型里它的模型、在线列表缓存，以及凭证文件里它的 Key（环境变量里的不动）。"""
     p = catalog.PROVIDERS.get(pid)
     if not p or not p.get("custom"):
         raise VoxError(f"「{pid}」不是自定义 Provider，内置的不能删除")

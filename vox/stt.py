@@ -1,9 +1,9 @@
 """语音识别（声音 → 文字）：vox transcribe、POST /v1/audio/transcriptions、WebUI「转写」共用这里。
 
-和合成共用 hub 里的模型体系（我的模型、下载、加载、Key、Provider），这里只管识别自己的事。
+和合成共用 hub 里的模型体系（已添加的模型、下载、加载、Key、Provider），这里只管识别自己的事。
 
 请求字段（CLI / HTTP / WebUI 同一套）：
-  model      识别模型（task=stt）。不填用默认：设置里的 stt_model，否则「我的模型」里第一个能用的识别模型
+  model      识别模型（task=stt）。不填用默认：设置里的 stt_model，否则已添加的模型里第一个能用的识别模型
   language   语种提示（zh / en / ja……），不填自动识别
   prompt     上下文提示（专有名词、前文）；模型不支持就不传
   hotwords   热词列表；模型不支持就不传
@@ -35,7 +35,7 @@ FORMATS = ("txt", "srt", "vtt", "json")
 
 # ---------- 模型 ----------
 def stt_models(mine: bool = True) -> list[dict]:
-    """识别模型（默认只要「我的模型」里的），按注册表顺序。"""
+    """识别模型（默认只要已添加的模型里的），按注册表顺序。"""
     return [m for m in catalog.MODELS if m["task"] == "stt" and (not mine or hub.is_mine(m))]
 
 
@@ -66,7 +66,7 @@ def _model(mid: str | None) -> dict:
     m = hub.model_or_raise(mid)
     if m["task"] != "stt":
         others = ", ".join(catalog.short(x) for x in stt_models()) or "（还没有，见 vox models --task stt --all）"
-        raise VoxError(f"{m['id']} 是语音合成模型，不能识别。我的识别模型：{others}")
+        raise VoxError(f"{m['id']} 是语音合成模型，不能识别。已添加的识别模型：{others}")
     return m
 
 

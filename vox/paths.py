@@ -2,8 +2,8 @@
 
 按「丢了能不能找回」分四类：
 
-  数据  ~/.vox                        合成结果 clips/、转写结果 transcripts/、音色样本 samples/、克隆音色 clones/、history.json、presets.json（我的预设）、
-                                      settings.json、models.json（我的模型）、providers.json（自定义 Provider）。
+  数据  ~/.vox                        合成结果 clips/、转写结果 transcripts/、音色样本 samples/、克隆音色 clones/、history.json、presets.json（预设）、
+                                      settings.json、models.json（已添加的模型）、providers.json（自定义 Provider）。
                                       丢了找不回来，要进备份。
   模型  ~/.vox/models                 下载的本地模型。能重新下载，所以标记为不进 Time Machine 备份。
   缓存  ~/Library/Caches/vox（macOS）  在线模型列表、云端音色列表、拉到的新版注册表。删了会自动重新获取，
@@ -47,7 +47,7 @@ CLIPS = HOME / "clips"
 TRANSCRIPTS = HOME / "transcripts"   # 语音识别结果，每条一个 JSON（按文件内容 + 请求哈希命名）
 SAMPLES = HOME / "samples"
 HISTORY = HOME / "history.json"
-PRESETS = HOME / "presets.json"     # 我的预设：音色 + 语气 + 语速 + 种子的组合
+PRESETS = HOME / "presets.json"     # 预设：音色 + 语气 + 语速 + 种子的组合
 MY_VOICES = HOME / "my_voices.json"  # 旧版「我的音色」文件，首次读取时迁移到 presets.json
 CLONES = HOME / "clones"            # 克隆音色：每个一个目录（参考录音 + 文字稿），见 clones.py
 SETTINGS = HOME / "settings.json"

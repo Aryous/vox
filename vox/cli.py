@@ -1,9 +1,9 @@
 """vox：语音合成（TTS）与语音识别（STT）命令行。与 WebUI / HTTP API 共用同一套模型 ID、音色引用和参数名；所有命令都支持 --json。
 
-  vox models                      我的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家；--task stt 只看识别模型
+  vox models                      已添加的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家；--task stt 只看识别模型
   vox models fetch openrouter     在线查询这家现在提供的模型（local = HuggingFace）
-  vox models add qwen3            加进我的模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
-  vox models rm <模型 ID>          移出我的模型（本地要加 --delete-files，会删除模型文件）
+  vox models add qwen3            添加模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
+  vox models rm <模型 ID>          移除模型（本地要加 --delete-files，会删除模型文件）
   vox models update               拉取新版模型注册表（只是数据，不含代码）
   vox voices -m qwen3             音色库
   vox sample qwen3:serena --play  试听音色样本
@@ -131,16 +131,16 @@ def cmd_models(a):
         r = _server("/api/models/add", {"model": tgt, "name": a.name, "task": task}) or _call(hub.add_model, tgt, name=a.name, task=task)
         if r.get("state"):   # 本地模型：开始下载
             return _out(a, r, lambda: print(f"↓ 开始下载 {r['model']}；进度：vox status，或在 WebUI 模型页查看"))
-        return _out(a, r, lambda: print(f"✓ 已加进我的模型：{r['model']}"))
+        return _out(a, r, lambda: print(f"✓ 已添加：{r['model']}"))
     if act == "rm":
         r = _server("/api/models/remove", {"model": tgt, "delete_files": a.delete_files}) or _call(hub.remove_model, tgt, a.delete_files)
-        return _out(a, r, lambda: print(f"✓ 已移出我的模型：{r['model']}" + (f"（已删除 {r['deleted']}）" if r.get("deleted") else "")))
+        return _out(a, r, lambda: print(f"✓ 已移除：{r['model']}" + (f"（已删除 {r['deleted']}）" if r.get("deleted") else "")))
     if act == "update":
         r = _server("/api/registry/update", {"url": tgt}) or _call(hub.registry_update, tgt)
         return _out(a, r, lambda: print(f"{'✓ 已更新' if r['changed'] else '已是最新'}：注册表 {r['updated']}（{r['providers']} 家 Provider，{r['models']} 个登记模型）"))
     qs = "&".join(x for x in (f"provider={a.provider}" if a.provider else "", "" if a.all else "mine=1", f"task={a.task}" if a.task else "") if x)
     ms = _server("/api/models?" + qs) or hub.models(a.provider, None if a.all else True, a.task)
-    _out(a, ms, lambda: _print_models(ms) if ms else print("我的模型是空的。vox models --all 查看可以下载 / 添加的模型"))
+    _out(a, ms, lambda: _print_models(ms) if ms else print("还没有添加模型。vox models --all 查看可以下载 / 添加的模型"))
 
 
 def _call(fn, *args, **kw):
@@ -437,13 +437,13 @@ def cmd_providers(a):
             for p in ps:
                 where = p.get("base_url") or ("本机" if p["kind"] == "local" else p.get("region", ""))
                 state = "本机" if p["kind"] == "local" else "已连接" if p["connected"] else "未连接"
-                print(f"{_pad(p['id'], 14)} {_pad(p['name'], 16)} {_pad(state, 7)} 我的模型 {_pad(f"{p['mine']}/{p['count']}", 6)} {'自定义 · ' if p.get('custom') else ''}{where}")
+                print(f"{_pad(p['id'], 14)} {_pad(p['name'], 16)} {_pad(state, 7)} 已添加 {_pad(f"{p['mine']}/{p['count']}", 6)} {'自定义 · ' if p.get('custom') else ''}{where}")
         return _out(a, ps, human)
     if not a.id:
         raise SystemExit(f"vox providers {act} 需要 Provider ID，例如 vox providers {act} my-kokoro")
     if act == "rm":
         r = _server("/api/providers/remove", {"id": a.id}) or _call(hub.provider_remove, a.id)
-        return _out(a, r, lambda: print(f"✓ 已删除自定义 Provider {a.id}（连同它在我的模型里的条目和保存的 Key）"))
+        return _out(a, r, lambda: print(f"✓ 已删除自定义 Provider {a.id}（连同它的已添加模型和保存的 Key）"))
     if act == "test" and not a.base_url:
         r = _server("/api/providers/test", {"id": a.id}) or _call(hub.provider_test, None, a.id)
         return _out(a, r, lambda: _print_test(r))
@@ -475,7 +475,7 @@ def cmd_providers(a):
         if r.get("key_env") and not r["connected"]:
             print(f"  还没有 Key：vox keys set {r['key_env']}")
         if r.get("found") is not None:
-            print(f"  查到 {r['found']} 个模型；vox models -p {r['provider']} --all 查看，vox models add {r['provider']}/<模型> 加进我的模型")
+            print(f"  查到 {r['found']} 个模型；vox models -p {r['provider']} --all 查看，vox models add {r['provider']}/<模型> 添加模型")
         if r.get("error"):
             print(f"  查询模型列表失败：{r['error']}（可以手动添加：vox models add {r['provider']}/<模型>）")
     _out(a, r, human)
@@ -514,7 +514,7 @@ def main(argv=None):
         sp.add_argument("--json", action="store_true", help="输出 JSON（给脚本和 Agent）")
         return sp
 
-    s = J(sub.add_parser("models", help="我的模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
+    s = J(sub.add_parser("models", help="模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
     s.add_argument("action", nargs="?", choices=["list", "fetch", "add", "rm", "update"])
     s.add_argument("target", nargs="?", help="Provider（fetch）、模型 ID（add / rm）或注册表地址（update）")
     s.add_argument("-p", "--provider", help="只看某一家")
@@ -595,7 +595,7 @@ def main(argv=None):
     s.add_argument("-m", "--model", help="首选模型（试听和不写 -m 时用它），如 qwen3-clone、gemini/gemini-3.8-flash-tts；不填用默认的克隆模型")
     s.add_argument("--consent", help="同意声明录音（Gemini 等云端克隆要求本人朗读一段规定的话）")
     s.set_defaults(fn=cmd_clones)
-    s = J(sub.add_parser("presets", help="我的预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))
+    s = J(sub.add_parser("presets", help="预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))
     s.add_argument("action", nargs="?", choices=["list", "rm"], default="list")
     s.add_argument("id", nargs="?")
     s.set_defaults(fn=cmd_presets)

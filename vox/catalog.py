@@ -3,11 +3,11 @@
 两类任务（模型的 task 字段）：
   tts   语音合成：文字 → 声音（vox say / POST /v1/audio/speech）
   stt   语音识别：声音 → 文字（vox transcribe / POST /v1/audio/transcriptions）
-  两类模型共用同一套 Provider、凭证、「我的模型」、下载与加载；各自的能力（caps）和参数（params）不同。
+  两类模型共用同一套 Provider、凭证、已添加的模型、下载与加载；各自的能力（caps）和参数（params）不同。
 
 统一命名（CLI、HTTP、WebUI 共用）：
   模型 ID    提供方/模型，如 local/qwen3、openai/gpt-4o-mini-tts、local/qwen3-asr；本地模型也接受短名 qwen3
-  音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；我的预设为 preset:<id>（旧写法 my:<id>），克隆音色为 clone:<id>
+  音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；预设为 preset:<id>（旧写法 my:<id>），克隆音色为 clone:<id>
   请求参数   model / input / voice / instructions / speed / seed / lang / temperature / top_p / top_k / repetition_penalty
 
 数据与代码分开：
@@ -26,7 +26,7 @@
   providers.<id>   name / kind（local|cloud）/ icon / region / credentials / optional / console / docs
                    adapter / key_env / compat（适配器配置）/ model_defaults（该家模型的公共字段）/ discover（在线列表怎么查）
   models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
-                   recommended（连接后默认加进「我的模型」）/ about / languages / tags（简单标签：第一梯队、性价比、免费、开源首选）…
+                   recommended（连接后默认添加模型）/ about / languages / tags（简单标签：第一梯队、性价比、免费、开源首选）…
                    caps.clone 表示能用克隆音色（clone:<id>，见 clones.py）；云端模型另需 compat.clone（mode / per_model / fee）
   stt_models[]     语音识别模型，字段同上（没有音色）。单独成表：旧版 vox 拉到新注册表时只认 models，不会把识别模型当成合成模型
                    本地识别模型另有两个可选字段：
@@ -51,7 +51,7 @@ from . import paths
 BUILTIN = Path(__file__).with_name("registry.json")
 UPDATED = paths.REGISTRY_UPDATE         # vox models update 拉到的新版注册表
 DISCOVERED = paths.DISCOVERED           # 在线列表缓存
-PREFS = paths.MY_MODELS                 # 用户的模型清单：我的模型、手动添加
+PREFS = paths.MY_MODELS                 # 用户的模型清单：已添加的模型、手动添加
 
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
 TASKS = ("tts", "stt")

@@ -33,14 +33,14 @@ def llms_txt(base: str) -> str:
 
 > 本地语音服务：统一接口调用多个语音合成（TTS）和语音识别（STT）模型。OpenAI 兼容，CLI / HTTP / WebUI 用同一套模型 ID、音色 ID 和参数名。
 
-## 我的模型（能直接调用的）
+## 已添加的模型（能直接调用的）
 {ms}
-全部模型（含未下载、未连接）：GET /api/models；只看我的：?mine=1；只看某家：?provider=
+全部模型（含未下载、未连接）：GET /api/models；只看已添加的：?mine=1；只看某家：?provider=
 
 ## 合成（OpenAI 兼容）
 POST {base}v1/audio/speech
 {{"model": "local/qwen3", "input": "你好", "voice": "serena", "instructions": "轻快友好", "speed": 1.0, "response_format": "mp3"}}
-扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用：预置音色 "qwen3:serena"、我的预设 "preset:<id>"、克隆音色 "clone:<id>"（要用支持克隆的模型；不写 model 时用默认的克隆模型）。
+扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用：预置音色 "qwen3:serena"、预设 "preset:<id>"、克隆音色 "clone:<id>"（要用支持克隆的模型；不写 model 时用默认的克隆模型）。
 第一次在会收费的云端（如 MiniMax）用克隆音色会被拒绝并说明费用，确认后加 "accept_fee": true 重发。
 返回音频字节；响应头 X-Vox-Id、X-Vox-Seed、X-Vox-Duration。
 
@@ -52,16 +52,16 @@ response_format：json（默认）/ text / srt / vtt / verbose_json（分句与�
 ## 原生 API（JSON）
 POST /api/transcribe             multipart：file + model / language / prompt / hotwords（逗号分隔）/ words / diarize / cache；返回完整转写记录
 GET  /api/transcripts?limit=     转写记录；GET /api/transcripts/<id>?format=txt|srt|vtt|json 全文或导出；POST /api/transcripts/delete {{"id"}}
-GET  /api/models                 模型与状态（not_downloaded / downloading / ready / loaded / needs_key），mine 表示在「我的模型」里
-POST /api/models/add {{"model"}} 或 {{"provider","remote"}}   加进我的模型（本地 = 开始下载）；GET /api/models/pull?model= 查下载进度
-POST /api/models/remove {{"model","delete_files"?}}   移出我的模型（本地要 delete_files: true，会删除模型文件）
+GET  /api/models                 模型与状态（not_downloaded / downloading / ready / loaded / needs_key），mine 表示在已添加的模型里
+POST /api/models/add {{"model"}} 或 {{"provider","remote"}}   添加模型（本地 = 开始下载）；GET /api/models/pull?model= 查下载进度
+POST /api/models/remove {{"model","delete_files"?}}   移除模型（本地要 delete_files: true，会删除模型文件）
 POST /api/providers/discover {{"provider"}}   在线查询这家现在提供的模型（本地 = HuggingFace）
 POST /api/models/load | /api/models/unload {{"model"}}
 GET  /api/voices?model=&lang=&gender=&q=   音色库
 POST /api/voices/sample {{"ref": "qwen3:serena"}}   生成 / 取音色样本
 POST /api/speech {{同 /v1/audio/speech}}   返回 JSON：id、request（含实际种子）、dur、url
 GET  /api/history?limit=&star=   POST /api/history/update {{"id","star"|"delete"}}   POST /api/asr {{"id"}}
-GET/POST /api/presets            我的预设（音色 + 语气 + 语速 + 种子）；POST /api/presets/delete {{"id"}}
+GET/POST /api/presets            预设（音色 + 语气 + 语速 + 种子）；POST /api/presets/delete {{"id"}}
 GET  /api/clones                 克隆音色；GET /clones/<id>/sample.wav 原始录音
 POST /api/clones                 multipart：file（参考录音，10–20 秒、一个人）+ name / model（首选模型）/ text（文字稿，留空自动识别）/ lang / consent（同意声明录音，部分云端需要）
 POST /api/clones/update {{"id","name"?,"text"?,"model"?}}；POST /api/clones/consent（multipart：id + consent）；POST /api/clones/delete {{"id"}}（顺带删除云端注册的音色）
