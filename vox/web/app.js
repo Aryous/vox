@@ -1359,7 +1359,7 @@ function pollPull(main) {
 // 一个文件进、一段文字出。选项只显示当前模型支持的；有分句时间戳时点一句就跳到那里播放。
 const TX_LANGS = [['', '自动识别'], ['zh', '中文'], ['en', '英语'], ['yue', '粤语'], ['ja', '日语'], ['ko', '韩语']];
 S.tx = { model: store.get('txModel', null), language: store.get('txLang', ''), hotwords: '', prompt: '', words: false, diarize: false,
-  file: null, url: null, dur: null, busy: null, err: null, rec: null, list: null };
+  file: null, url: null, dur: null, busy: null, err: null, list: null, sel: null, cache: {}, q: '', find: '', follow: store.get('txFollow', true) };
 const clock = s => { s = Math.max(0, s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = Math.floor(s % 60); return `${h ? h + ':' + String(m).padStart(2, '0') : m}:${String(x).padStart(2, '0')}`; };
 const mineSTT = () => mine().filter(m => !isTTS(m));
 function txModel() {
@@ -1372,18 +1372,27 @@ function pageTranscribe(main) {
   main.innerHTML = `
     <div class="head"><div><h1>转写</h1><p>把录音、视频转成文字或字幕。本地模型在这台 Mac 上识别，文件不离开本机；选云端模型时，文件会发给那家 Provider。</p></div><button class="cli" type="button" data-copy="vox transcribe 录音.m4a">vox transcribe</button></div>
     ${ready ? '' : txEmpty()}
-    <section class="sec tx-in" ${ready ? '' : 'hidden'}>
-      <label class="drop ${S.tx.file ? 'has' : ''}" id="txDrop">
-        <input type="file" id="txFile" accept="audio/*,video/*" hidden>
-        <span class="drop-ic">${ic(S.tx.file ? 'wave' : 'upload', 22)}</span>
-        ${S.tx.file ? `<span class="drop-t"><b>${esc(S.tx.file.name)}</b><span>${(S.tx.file.size / 1e6).toFixed(1)} MB${S.tx.dur ? ` · ${clock(S.tx.dur)}` : ''} · 点这里换一个</span></span>`
-          : '<span class="drop-t"><b>拖入音频或视频，或点这里选择</b><span>mp3、m4a、wav、mp4、mov……ffmpeg 能读的都行</span></span>'}
-      </label>
-      <div class="tx-opts" id="txOpts"></div>
-      <div class="tx-go"><span class="note" id="txEst"></span><span class="sp"></span><button class="btn primary" type="button" id="txGo">${ic('wave', 15)}开始转写</button></div>
+    <section class="tx-new" ${ready ? '' : 'hidden'}>
+      <div class="tx-r1">
+        <label class="drop ${S.tx.file ? 'has' : ''}" id="txDrop">
+          <input type="file" id="txFile" accept="audio/*,video/*" hidden>
+          <span class="drop-ic">${ic(S.tx.file ? 'wave' : 'upload', 20)}</span>
+          ${S.tx.file ? `<span class="drop-t"><b>${esc(S.tx.file.name)}</b><span>${(S.tx.file.size / 1e6).toFixed(1)} MB${S.tx.dur ? ` · ${clock(S.tx.dur)}` : ''} · 点这里换一个</span></span>`
+            : '<span class="drop-t"><b>拖入音频或视频，或点这里选择</b><span>mp3、m4a、wav、mp4、mov……ffmpeg 能读的都行</span></span>'}
+        </label>
+        <div class="tx-pick" id="txPick"></div>
+        <button class="btn primary lg" type="button" id="txGo">${ic('wave', 15)}开始转写</button>
+      </div>
+      <div class="tx-r2" id="txOpts"></div>
     </section>
-    <section class="sec tx-out" id="txOut" hidden></section>
-    <section class="sec" id="txList"></section>`;
+    <div class="tx-split ${S.tx.sel ? 'reading' : ''}" id="txSplit" ${ready || S.tx.list?.length ? '' : 'hidden'}>
+      <aside class="tx-side" aria-label="转写记录">
+        <div class="tx-side-h"><h2>转写记录</h2><span class="n" id="txN"></span><span class="sp"></span></div>
+        <label class="search">${ic('search', 14)}<input class="in" id="txQ" type="search" placeholder="搜索文件名或内容" value="${esc(S.tx.q || '')}" aria-label="搜索转写记录"></label>
+        <div class="tx-items" id="txItems" role="listbox" aria-label="转写记录"></div>
+      </aside>
+      <section class="tx-read" id="txRead" aria-live="polite"></section>
+    </div>`;
   const inp = $('#txFile', main), drop = $('#txDrop', main);
   inp.onchange = () => inp.files[0] && pickFile(inp.files[0], main);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
@@ -1391,15 +1400,17 @@ function pageTranscribe(main) {
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) pickFile(f, main); };
   $('#txGo', main).onclick = () => runTranscribe(main);
   $$('.head [data-copy]', main).forEach(b => b.onclick = () => copy(b.dataset.copy, '已复制命令'));
+  const q = $('#txQ', main); onText(q, () => { S.tx.q = q.value; renderTxList(main); }, 120);
+  $('#txItems', main).onclick = e => { const b = e.target.closest('[data-open]'); if (b) openTx(b.dataset.open, main); };
   bindTxEmpty(main);
-  renderTxOpts(main); renderTxOut(main); loadTxList(main);
+  renderTxOpts(main); renderTxList(main); renderReader(main); loadTxList(main);
 }
 function txEmpty() {
   const dl = S.models.find(x => !isTTS(x) && x.status === 'downloading');
   if (dl) return `<div class="empty tx-dl"><b>正在下载 ${esc(mName(dl))}</b><span data-txprog>准备中…</span>
     <div class="bar"><i data-txbar></i></div><span class="note">下载完就能用，这个页面会自动刷新；也可以先去做别的。</span></div>`;
   const local = S.models.find(x => !isTTS(x) && x.provider === 'local'), cloud = S.models.filter(x => !isTTS(x) && x.provider !== 'local');
-  return `<div class="empty"><b>还没有能用的识别模型</b>下载一个本地模型，完全离线识别；或者连接支持识别的云端 Provider（${[...new Set(cloud.map(x => esc(PV(x.provider)?.name || x.provider)))].join('、')}）。
+  return `<div class="empty"><b>还没有能用的识别模型</b>下载一个本地模型，完全离线识别；或者连接支持识别的云端 Provider：${[...new Set(cloud.map(x => esc(pvName(x.provider))))].join('、')}。
     <div class="empty-a">${local ? `<button class="btn primary" type="button" data-txadd="${esc(local.id)}">${ic('download', 14)}下载 ${esc(mName(local))} · ${local.size_gb} GB</button>` : ''}
     <a class="btn" href="#/models/mine">去模型页</a></div></div>`;
 }
@@ -1429,19 +1440,20 @@ function pollTxPull(main) {
     pollTxPull(main);
   }, 1500);
 }
+/* ---------- 新建转写：文件 · 模型 · 语种 · 开始；模型支持的话再给热词、上下文、说话人 ---------- */
 function renderTxOpts(main) {
-  const el = $('#txOpts', main); if (!el) return;
+  const pick = $('#txPick', main), el = $('#txOpts', main); if (!pick) return;
   const m = txModel(); if (!m) return;
   const ms = mineSTT(), c = m.caps;
+  pick.innerHTML = `${dd('txModel', { value: m.id, label: '识别模型', width: 340, groups: modelGroups(ms).map(g => ({ ...g, items: g.items.map(it => ({ ...it, sub: M(it.value).about ? trunc(M(it.value).about, 34) : '', tags: [...CAP_T(M(it.value)).filter(([k]) => M(it.value).caps[k] && ['diarize', 'segments'].includes(k)).map(([, t]) => [t, 'mute']), ...it.tags] })) })), onChange: v => { S.tx.model = v; store.set('txModel', v); renderTxOpts(main); } })}
+    ${dd('txLang', { value: S.tx.language, label: '语种', cls: 'lang', groups: [{ items: TX_LANGS.map(([k, t]) => ({ value: k, label: t })) }], onChange: v => { S.tx.language = v; store.set('txLang', v); renderTxOpts(main); } })}`;
   el.innerHTML = `
-    <div class="field"><div class="lbl"><span>模型</span></div>
-      ${dd('txModel', { value: m.id, label: '识别模型', groups: modelGroups(ms).map(g => ({ ...g, items: g.items.map(it => ({ ...it, tags: [...CAP_T(M(it.value)).filter(([k]) => M(it.value).caps[k] && ['diarize', 'segments'].includes(k)).map(([, t]) => [t, 'mute']), ...it.tags] })) })), onChange: v => { S.tx.model = v; store.set('txModel', v); renderTxOpts(main); } })}</div>
-    <div class="field"><div class="lbl"><span>语种</span></div>
-      ${dd('txLang', { value: S.tx.language, label: '语种', groups: [{ items: TX_LANGS.map(([k, t]) => ({ value: k, label: t })) }], onChange: v => { S.tx.language = v; store.set('txLang', v); renderTxOpts(main); } })}</div>
-    ${c.hotwords ? `<div class="field wide"><div class="lbl"><span>热词</span></div><input class="in" id="txHot" value="${esc(S.tx.hotwords)}" placeholder="人名、产品名，逗号分隔：vox，Qwen3，Obsidian"></div>` : ''}
-    ${c.prompt ? `<div class="field wide"><div class="lbl"><span>上下文提示</span></div><input class="in" id="txPrompt" value="${esc(S.tx.prompt)}" placeholder="这段录音讲什么、有哪些专有名词（可不填）"></div>` : ''}
-    ${c.words || c.diarize ? `<div class="field wide tx-flags">${c.diarize ? `<label class="pf-check"><input type="checkbox" id="txDia" ${S.tx.diarize ? 'checked' : ''}> 区分说话人</label>` : ''}${c.words ? `<label class="pf-check"><input type="checkbox" id="txWords" ${S.tx.words ? 'checked' : ''}> 逐词时间戳</label>` : ''}</div>` : ''}
-    <p class="note wide">${esc(m.about || '')}${c.segments || c.diarize ? '' : ' 这个模型只给整段文字，要字幕请选带分句时间戳的模型。'}</p>`;
+    ${c.hotwords ? `<input class="in" id="txHot" value="${esc(S.tx.hotwords)}" placeholder="热词：人名、产品名，逗号分隔" aria-label="热词">` : ''}
+    ${c.prompt ? `<input class="in" id="txPrompt" value="${esc(S.tx.prompt)}" placeholder="上下文：这段录音讲什么（可不填）" aria-label="上下文提示">` : ''}
+    ${c.diarize ? `<label class="switch"><input type="checkbox" id="txDia" ${S.tx.diarize ? 'checked' : ''}><i></i>区分说话人</label>` : ''}
+    ${c.words ? `<label class="switch"><input type="checkbox" id="txWords" ${S.tx.words ? 'checked' : ''}><i></i>逐词时间戳</label>` : ''}
+    <span class="note tx-est" id="txEst"></span>`;
+  el.hidden = !el.children.length;
   onText($('#txHot', el), () => S.tx.hotwords = $('#txHot', el).value);
   onText($('#txPrompt', el), () => S.tx.prompt = $('#txPrompt', el).value);
   const dia = $('#txDia', el), w = $('#txWords', el);
@@ -1453,8 +1465,9 @@ function updateTxGo(main) {
   const m = txModel(), go = $('#txGo', main), est = $('#txEst', main); if (!go) return;
   go.disabled = !S.tx.file || !!S.tx.busy || !m || !usable(m);
   const p = m?.price, perSec = p && p.amount != null ? p.amount / (p.per || 1) / ({ second: 1, minute: 60, hour: 3600 }[p.unit] || NaN) : NaN;
-  est.textContent = !m ? '' : !usable(m) ? (m.provider === 'local' ? '这个模型还没下载' : `${PV(m.provider)?.name || ''} 还没连接`)
-    : !S.tx.file ? '先选一个文件' : m.provider === 'local' ? `本机识别，免费${m.status === 'loaded' ? '' : ' · 第一次要先加载模型'}`
+  if (est) est.textContent = !m ? '' : !usable(m) ? (m.provider === 'local' ? '这个模型还没下载' : `${pvName(m.provider)} 还没连接`)
+    : S.tx.busy ? '正在转写，完成后出现在下面的记录里' : !S.tx.file ? (m.caps.segments || m.caps.diarize ? '先选一个文件' : '先选一个文件 · 这个模型只给整段文字，导不出字幕')
+    : m.provider === 'local' ? `本机识别，免费${m.status === 'loaded' ? '' : ' · 第一次要先加载模型'}`
     : isFinite(perSec) && S.tx.dur ? (perSec ? `云端识别，约 ${money(perSec * S.tx.dur, p.currency)}` : '云端识别，免费') : '云端识别，按音频时长计费';
 }
 function pickFile(f, main) {
@@ -1466,68 +1479,160 @@ function pickFile(f, main) {
 }
 function runTranscribe(main) {
   const m = txModel(); if (!m || !S.tx.file || S.tx.busy) return;
-  const fd = new FormData();
-  fd.append('file', S.tx.file, S.tx.file.name);
+  const fd = new FormData(), file = S.tx.file;
+  fd.append('file', file, file.name);
   const opts = { model: m.id, language: S.tx.language, hotwords: m.caps.hotwords ? S.tx.hotwords : '', prompt: m.caps.prompt ? S.tx.prompt : '',
     words: m.caps.words && S.tx.words ? 'true' : '', diarize: m.caps.diarize && S.tx.diarize ? 'true' : '', source: 'webui' };
   Object.entries(opts).forEach(([k, v]) => v && fd.append(k, v));
   // XHR 而不是 fetch：要上传进度（几百 MB 的视频上传也要一会儿）
   const x = new XMLHttpRequest(), t0 = Date.now();
-  S.tx.busy = { phase: '上传中', pct: 0, t0 }; S.tx.err = null; renderTxOut(main); updateTxGo(main);
-  const tick = setInterval(() => { if (S.route === 'transcribe') renderTxOut(main); else clearInterval(tick); }, 500);
+  S.tx.busy = { phase: '上传中', pct: 0, t0, file: file.name, model: m.id, dur: S.tx.dur }; S.tx.err = null; S.tx.sel = 'busy';
+  renderTxList(main); renderReader(main); updateTxGo(main);
+  const tick = setInterval(() => { if (S.route === 'transcribe') { if (S.tx.sel === 'busy') renderReader(main); renderTxList(main); } else clearInterval(tick); }, 500);
   x.upload.onprogress = e => { if (e.lengthComputable) S.tx.busy.pct = e.loaded / e.total; };
-  x.upload.onload = () => { S.tx.busy.phase = m.provider === 'local' ? (m.status === 'loaded' ? '识别中' : '加载模型并识别中') : `${PV(m.provider)?.name || ''} 识别中`; };
+  x.upload.onload = () => { S.tx.busy.phase = m.provider === 'local' ? (m.status === 'loaded' ? '识别中' : '加载模型并识别中') : `${pvName(m.provider)} 识别中`; };
   x.onloadend = async () => {
     clearInterval(tick);
     let j = null; try { j = JSON.parse(x.responseText); } catch {}
     S.tx.busy = null;
-    if (x.status === 200 && j && !j.error) { S.tx.rec = j; S.tx.list = null; if (m.provider === 'local' && m.status !== 'loaded') refreshModels().then(refreshStatus); }
-    else S.tx.err = j?.error?.message || j?.error || `HTTP ${x.status || '连接中断'}`;
-    if (S.route === 'transcribe') { renderTxOut(main); updateTxGo(main); loadTxList(main); }
+    if (x.status === 200 && j && !j.error) {
+      S.tx.cache[j.id] = j; S.tx.list = null; if (S.tx.sel === 'busy') S.tx.sel = j.id;
+      if (m.provider === 'local' && m.status !== 'loaded') refreshModels().then(refreshStatus);
+    } else { S.tx.err = { msg: j?.error?.message || j?.error || `HTTP ${x.status || '连接中断'}`, file: file.name }; S.tx.sel = 'busy'; }
+    if (S.route === 'transcribe') { updateTxGo(main); await loadTxList(main); renderReader(main); }
   };
   x.open('POST', '/api/transcribe'); x.send(fd);
 }
-function renderTxOut(main) {
-  const el = $('#txOut', main); if (!el) return;
-  const b = S.tx.busy, r = S.tx.rec;
-  el.hidden = !b && !r && !S.tx.err;
-  if (b) {
-    const s = (Date.now() - b.t0) / 1000;
-    el.innerHTML = `<div class="tx-busy"><span class="spin"></span><b>${b.phase === '上传中' ? `上传中 ${Math.round(b.pct * 100)}%` : b.phase}…</b><span class="note">${clock(s)}${S.tx.dur && b.phase !== '上传中' ? ` · 音频 ${clock(S.tx.dur)}` : ''}</span></div>`;
+
+/* ---------- 左：转写记录；右：阅读区 ---------- */
+async function loadTxList(main) {
+  if (!S.tx.list) { try { S.tx.list = await api('/api/transcripts?limit=200'); } catch { S.tx.list = []; } }
+  if (S.route !== 'transcribe') return;
+  if (!S.tx.sel && S.tx.list.length && innerWidth > 900) S.tx.sel = S.tx.list[0].id;   // 宽屏默认打开最新一条；窄屏先看列表
+  $('#txSplit', main).hidden = !S.tx.list.length && !S.tx.busy && !S.tx.err && !mineSTT().some(usable);
+  if (S.tx.sel && S.tx.sel !== 'busy' && !S.tx.cache[S.tx.sel]) return openTx(S.tx.sel, main);
+  renderTxList(main); renderReader(main);
+}
+const txShown = () => { const q = (S.tx.q || '').trim().toLowerCase(); return (S.tx.list || []).filter(r => !q || `${r.file} ${r.preview}`.toLowerCase().includes(q)); };
+function renderTxList(main) {
+  const el = $('#txItems', main); if (!el) return;
+  const rs = txShown(), b = S.tx.busy, er = S.tx.err;
+  $('#txN', main).textContent = S.tx.list?.length || '';
+  const pend = b ? `<button type="button" class="tx-it pend ${S.tx.sel === 'busy' ? 'on' : ''}" data-open="busy"><span class="tx-it-t"><b>${esc(b.file)}</b></span><span class="tx-it-m"><span class="spin"></span>${b.phase === '上传中' ? `上传中 ${Math.round(b.pct * 100)}%` : b.phase}</span></button>`
+    : er ? `<button type="button" class="tx-it pend err ${S.tx.sel === 'busy' ? 'on' : ''}" data-open="busy"><span class="tx-it-t"><b>${esc(er.file)}</b></span><span class="tx-it-m">识别失败</span></button>` : '';
+  el.innerHTML = pend + (rs.map(r => {
+    const m = M(r.request.model);
+    return `<button type="button" class="tx-it ${S.tx.sel === r.id ? 'on' : ''}" data-open="${r.id}" role="option" aria-selected="${S.tx.sel === r.id}">
+      <span class="tx-it-t"><b>${esc(r.file)}</b><time>${ago(r.ts)}</time></span>
+      <span class="tx-it-p">${esc(r.preview || '（没有识别出文字）')}</span>
+      <span class="tx-it-m">${[r.duration ? clock(r.duration) : '', esc(m ? mName(m) : r.request.model), r.speakers ? `${r.speakers} 位说话人` : ''].filter(Boolean).join(' · ')}</span></button>`;
+  }).join('') || (S.tx.list && !pend ? `<p class="tx-none">${S.tx.q ? '没有匹配的记录。' : '还没有转写记录。'}</p>` : ''));
+}
+async function openTx(id, main) {
+  S.tx.sel = id; S.tx.confirmDel = false; S.tx.find = '';
+  $('#txSplit', main)?.classList.add('reading');
+  renderTxList(main);
+  if (id !== 'busy' && !S.tx.cache[id]) { renderReader(main); try { S.tx.cache[id] = await api(`/api/transcripts/${id}`); } catch (e) { toast(e.message, 4000); } }
+  if (S.tx.sel === id) renderReader(main);
+  $(`[data-open="${CSS.escape(id)}"]`, main)?.scrollIntoView({ block: 'nearest' });
+  if (innerWidth <= 900 && $('#txSplit', main)) scrollTo({ top: $('#txSplit', main).offsetTop - 12 });
+}
+function renderReader(main) {
+  const el = $('#txRead', main); if (!el) return;
+  const sel = S.tx.sel, back = '<button class="btn ghost sm tx-back" type="button" data-txback>← 转写记录</button>';
+  if (sel === 'busy' && S.tx.busy) {
+    const b = S.tx.busy, s = (Date.now() - b.t0) / 1000, m = M(b.model);
+    el.innerHTML = `<div class="rd-wait">${back}<span class="spin big"></span><b>${b.phase === '上传中' ? `上传中 ${Math.round(b.pct * 100)}%` : `${b.phase}…`}</b>
+      <span class="note">${esc(b.file)} · ${esc(m ? mName(m) : b.model)}${b.dur ? ` · 音频 ${clock(b.dur)}` : ''} · 已用 ${clock(s)}</span>
+      <span class="note">可以先看别的记录，完成后会自动打开。</span></div>`;
+    return bindReader(el, main);
+  }
+  if (sel === 'busy' && S.tx.err) {
+    el.innerHTML = `<div class="rd-wait">${back}<b class="err">识别失败</b><span class="note">${esc(S.tx.err.file)}：${esc(S.tx.err.msg)}</span>
+      <div class="empty-a"><button class="btn primary" type="button" id="txRetry" ${S.tx.file ? '' : 'disabled'}>重试</button><button class="btn" type="button" id="txDismiss">关闭</button></div></div>`;
+    $('#txRetry', el).onclick = () => runTranscribe(main);
+    $('#txDismiss', el).onclick = () => { S.tx.err = null; S.tx.sel = S.tx.list?.[0]?.id || null; renderTxList(main); renderReader(main); };
+    return bindReader(el, main);
+  }
+  const r = sel && S.tx.cache[sel];
+  if (!r) {
+    el.innerHTML = sel ? `<div class="rd-wait"><span class="spin big"></span><span class="note">正在打开…</span></div>`
+      : `<div class="rd-empty">${ic('wave', 26)}<b>${S.tx.list?.length ? '选一条转写查看' : '转写结果会出现在这里'}</b><span>${S.tx.list?.length ? '用 ↑ ↓ 键在记录之间切换。' : '在上面选一个文件，点「开始转写」。'}</span></div>`;
     return;
   }
-  if (S.tx.err) { el.innerHTML = `<div class="tx-busy"><span class="err">识别失败：${esc(S.tx.err)}</span></div>`; return; }
-  if (!r) return;
-  const rm = M(r.request.model), live = S.tx.file && S.tx.file.name === r.file, spk = new Set(r.segments.map(x => x.speaker).filter(Boolean));
-  const facts = [r.duration ? `音频 ${clock(r.duration)}` : '', `用时 ${r.elapsed}s`, r.language ? `语种 ${esc(r.language)}` : '', spk.size ? `${spk.size} 位说话人` : '',
-    r.cost?.amount != null ? money(r.cost.amount, r.cost.currency) : '', r.cached ? '缓存' : ''].filter(Boolean);
-  const exp = f => `<a class="btn ghost sm" href="/api/transcripts/${r.id}?format=${f}&download=1" title="下载 ${f.toUpperCase()}">${f.toUpperCase()}</a>`;
-  const fmts = r.timed ? ['txt', 'srt', 'vtt', 'json'] : ['txt', 'json'];   // 没有分句时间戳就不给字幕格式，并说明原因
+  const m = M(r.request.model), spk = [...new Set(r.segments.map(x => x.speaker).filter(Boolean))], segs = r.timed && r.segments.length;
+  const live = S.tx.file && S.tx.file.name === r.file, src = r.audio ? `/api/transcripts/${r.id}/audio` : live ? S.tx.url : '';
+  const facts = [r.duration ? clock(r.duration) : '', r.language ? `语种 ${esc(r.language)}` : '', `识别用时 ${r.elapsed}s`, r.cost?.amount != null ? money(r.cost.amount, r.cost.currency) : '', r.cached ? '缓存' : ''].filter(Boolean);
+  const fmts = segs ? ['txt', 'srt', 'vtt', 'json'] : ['txt', 'json'];   // 没有分句时间戳就不给字幕格式
   el.innerHTML = `
-    <div class="sec-h"><h3>${ic('wave', 15)}${esc(r.file)}</h3><span class="note">${esc(rm ? mName(rm) : r.request.model)} · ${facts.join(' · ')}</span><span class="sp"></span>
-      ${r.timed ? '' : '<span class="note" title="这个模型只给整段文字，没有分句时间戳">无时间戳，导不出字幕</span>'}<button class="btn sm" type="button" id="txCopy">${ic('copy', 14)}复制文字</button>${fmts.map(exp).join('')}</div>
-    ${live ? `<audio class="tx-audio" controls src="${S.tx.url}" id="txAudio"></audio>` : ''}
-    ${r.timed && r.segments.length ? `<div class="tx-segs">${r.segments.map(x => `<button class="tx-seg" type="button" data-at="${x.start}" ${live ? '' : 'disabled'}><time>${clock(x.start)}</time>${x.speaker ? `<b class="spk" style="--h:${[...spk].indexOf(x.speaker) * 67}">${esc(x.speaker)}</b>` : ''}<span>${esc(x.text)}</span></button>`).join('')}</div>`
-      : `<div class="tx-text">${esc(r.text) || '<span class="note">（没有识别出文字）</span>'}</div>`}`;
-  $('#txCopy', el).onclick = () => copy(r.timed && spk.size ? r.segments.map(x => `[${x.speaker}] ${x.text}`).join('\n') : r.text, '已复制');
-  const au = $('#txAudio', el);
-  $$('[data-at]', el).forEach(bt => bt.onclick = () => { if (au) { au.currentTime = +bt.dataset.at; au.play(); } });
+    <header class="rd-h">
+      ${back}
+      <div class="rd-t"><h2 title="${esc(r.file)}">${esc(r.file)}</h2>
+        <div class="rd-m"><span class="pl pl-m" style="--m:${hue(r.request.model)}">${m ? mIcon(m, 12) : ''}${esc(m ? mName(m) : r.request.model)}</span>${spk.length ? `<span class="pl pl-s">${spk.length} 位说话人</span>` : ''}${!segs ? '<span class="pl pl-n" title="这个模型只给整段文字，没有分句时间戳">无时间戳</span>' : ''}<span class="rd-f">${facts.join(' · ')}</span></div></div>
+      <div class="rd-a">
+        <label class="search sm">${ic('search', 13)}<input class="in" id="rdFind" type="search" placeholder="在全文中查找" value="${esc(S.tx.find || '')}" aria-label="在全文中查找"></label>
+        <button class="btn sm" type="button" id="rdCopy">${ic('copy', 14)}复制文字</button>
+        ${dd('rdExp', { menu: true, cls: 'btn sm', trigger: `${ic('download', 14)}导出${ICV}`, width: 220, groups: [{ items: fmts.map(f => ({ value: f, label: f.toUpperCase(), sub: { txt: '纯文字，有说话人时一人一段', srt: '字幕', vtt: '网页字幕', json: '完整数据，含时间戳' }[f] })) }],
+          onChange: f => Object.assign(document.createElement('a'), { href: `/api/transcripts/${r.id}?format=${f}&download=1` }).click() })}
+        ${dd('rdMore', { menu: true, trigger: ic('more', 16), title: '更多操作', width: 220, groups: [{ items: [{ value: 'cmd', label: '复制导出命令', sub: 'vox transcripts', icon: ic('code', 15) }, { value: 'del', label: '删除这条转写', sub: '文字和音频一起删', icon: ic('x', 15), danger: true }] }],
+          onChange: v => { if (v === 'cmd') copy(`vox transcripts ${r.id} -f ${segs ? 'srt' : 'txt'}`, '已复制命令'); if (v === 'del') { S.tx.confirmDel = true; renderReader(main); } } })}
+      </div>
+      ${S.tx.confirmDel ? `<div class="rd-del"><span>删除「${esc(r.file)}」的转写？文字和保存的音频都会删掉，不能恢复。</span><span class="sp"></span><button class="btn sm" type="button" id="rdDelNo">取消</button><button class="btn sm danger-solid" type="button" id="rdDelYes">删除</button></div>` : ''}
+      ${src ? `<div class="rd-play"><audio controls src="${src}" id="txAudio" preload="metadata"></audio>${segs ? `<label class="switch" title="播放时自动滚到正在读的那一句"><input type="checkbox" id="rdFollow" ${S.tx.follow !== false ? 'checked' : ''}><i></i>跟随播放</label>` : ''}</div>`
+        : `<p class="rd-noaudio">这条记录没有保存音频，只能看文字。重新转写同一个文件会补上。</p>`}
+    </header>
+    <div class="rd-b ${segs ? '' : 'plain'}" id="rdBody">${segs ? r.segments.map((x, i) => {
+      const prev = r.segments[i - 1], turn = x.speaker && x.speaker !== prev?.speaker;
+      return `<div class="sg ${x.speaker && !turn ? 'cont' : ''} ${turn && i ? 'turn' : ''}" data-at="${x.start}" data-i="${i}" ${src ? 'role="button" tabindex="0"' : ''}><time>${clock(x.start)}</time>${x.speaker ? `<span class="spk" style="--h:${spk.indexOf(x.speaker) * 67 + 210}">${turn ? esc(x.speaker) : ''}</span>` : ''}<p>${hl(x.text)}</p></div>`;
+    }).join('') : `<div class="rd-text">${hl(r.text) || '<span class="note">（没有识别出文字）</span>'}</div>`}</div>`;
+  bindReader(el, main, r);
 }
-async function loadTxList(main) {
-  const el = $('#txList', main); if (!el) return;
-  if (!S.tx.list) { try { S.tx.list = await api('/api/transcripts?limit=30'); } catch { S.tx.list = []; } }
-  if (S.route !== 'transcribe') return;
-  const rs = S.tx.list;
-  el.hidden = !rs.length;
-  el.innerHTML = `<div class="sec-h"><h3>最近的转写</h3><span class="n">${rs.length}</span><span class="sp"></span><span class="note">和 vox transcripts 共享</span></div>
-    <div class="tx-rows">${rs.map(r => `<div class="tx-row ${S.tx.rec?.id === r.id ? 'on' : ''}"><button class="tx-open" type="button" data-open="${r.id}"><b>${esc(r.file)}</b><span>${esc(r.preview || '（空）')}</span></button>
-      <span class="note">${esc(M(r.request.model) ? mName(M(r.request.model)) : r.request.model)} · ${r.duration ? clock(r.duration) : ''} · ${ago(r.ts)}</span>
-      <button class="btn ghost sm danger" type="button" data-del="${r.id}" aria-label="删除这条转写" title="删除这条转写">${ic('x', 14)}</button></div>`).join('')}</div>`;
-  $$('[data-open]', el).forEach(b => b.onclick = async () => { S.tx.rec = await api(`/api/transcripts/${b.dataset.open}`); S.tx.err = null; renderTxOut(main); loadTxList(main); $('#txOut', main).scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
-  $$('[data-del]', el).forEach(b => b.onclick = async () => {
-    if (!b.classList.contains('armed')) { b.classList.add('armed'); b.innerHTML = '确认删除'; clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('armed'); b.innerHTML = ic('x', 14); }, 4000); return; }
-    await api('/api/transcripts/delete', { id: b.dataset.del }); if (S.tx.rec?.id === b.dataset.del) S.tx.rec = null; S.tx.list = null; renderTxOut(main); loadTxList(main); toast('已删除'); });
+// 全文查找：高亮所有匹配
+const hl = t => { const q = (S.tx.find || '').trim(); const e = esc(t); if (!q) return e; const eq = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); return e.replace(new RegExp(eq, 'gi'), x => `<mark>${x}</mark>`); };
+function bindReader(el, main, r) {
+  $$('[data-txback]', el).forEach(b => b.onclick = () => { $('#txSplit', main).classList.remove('reading'); S.tx.sel = null; renderTxList(main); });
+  if (!r) return;
+  const au = $('#txAudio', el), body = $('#rdBody', el);
+  $('#rdCopy', el).onclick = () => copy(r.timed && r.segments.some(x => x.speaker) ? r.segments.map(x => `[${x.speaker}] ${x.text}`).join('\n') : r.text, '已复制全文');
+  const fi = $('#rdFind', el);
+  onText(fi, () => {
+    S.tx.find = fi.value; $$('.sg p, .rd-text', body).forEach((p, i) => { p.innerHTML = p.classList.contains('rd-text') ? hl(r.text) : hl(r.segments[+p.parentNode.dataset.i].text); });
+    $('mark', body)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 150);
+  fi.onkeydown = e => { if (e.key !== 'Enter' || e.isComposing) return; const ms = $$('mark', body); if (!ms.length) return; S.tx.mi = ((S.tx.mi ?? -1) + 1) % ms.length; ms.forEach((x, i) => x.classList.toggle('cur', i === S.tx.mi)); ms[S.tx.mi].scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+  const yes = $('#rdDelYes', el); if (yes) {
+    $('#rdDelNo', el).onclick = () => { S.tx.confirmDel = false; renderReader(main); };
+    yes.onclick = async () => {
+      try { await api('/api/transcripts/delete', { id: r.id }); } catch (e) { return toast(e.message, 5000); }
+      const i = S.tx.list.findIndex(x => x.id === r.id); delete S.tx.cache[r.id]; S.tx.list = S.tx.list.filter(x => x.id !== r.id);
+      S.tx.confirmDel = false; S.tx.sel = innerWidth > 900 ? (S.tx.list[i] || S.tx.list[i - 1])?.id || null : null;
+      if (!S.tx.sel) $('#txSplit', main).classList.remove('reading');
+      toast('已删除'); renderTxList(main); S.tx.sel ? openTx(S.tx.sel, main) : renderReader(main);
+    };
+  }
+  if (!au || !body) return;
+  const fo = $('#rdFollow', el); if (fo) fo.onchange = () => { S.tx.follow = fo.checked; store.set("txFollow", fo.checked); };
+  const seek = row => { au.currentTime = +row.dataset.at; au.play(); };
+  body.onclick = e => { const row = e.target.closest('.sg'); if (row && !getSelection().toString()) seek(row); };
+  body.onkeydown = e => { const row = e.target.closest('.sg'); if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); seek(row); } };
+  // 播放时标出正在读的那一句，并（可选）跟着滚动
+  const starts = r.segments.map(x => x.start); let curI = -1;
+  au.ontimeupdate = () => {
+    const t = au.currentTime; let i = starts.findIndex((s, k) => s <= t && (k === starts.length - 1 || starts[k + 1] > t));
+    if (i === curI) return; curI = i;
+    $$('.sg.now', body).forEach(x => x.classList.remove('now'));
+    const row = $(`.sg[data-i="${i}"]`, body); if (!row) return;
+    row.classList.add('now');
+    if (S.tx.follow !== false && !au.paused) { const rc = row.getBoundingClientRect(); if (rc.top < 180 || rc.bottom > innerHeight - 80) row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+  };
 }
+// ↑ ↓ 在记录之间切换（焦点不在输入框时）
+document.addEventListener('keydown', e => {
+  if (S.route !== 'transcribe' || ddOpen || !['ArrowDown', 'ArrowUp'].includes(e.key) || e.target.closest?.('input,textarea,audio,[contenteditable]') || e.metaKey || e.altKey) return;
+  const rs = txShown(); if (!rs.length) return;
+  const i = rs.findIndex(r => r.id === S.tx.sel), n = Math.max(0, Math.min(rs.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+  if (rs[n] && rs[n].id !== S.tx.sel) { e.preventDefault(); openTx(rs[n].id, $('#main')); }
+});
 
 function pageApi(main) {
   const ready = mineTTS().filter(usable), m = M(S.apiModel) && usable(M(S.apiModel)) && isTTS(M(S.apiModel)) ? M(S.apiModel) : ready[0] || S.models.find(isTTS);

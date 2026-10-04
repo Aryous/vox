@@ -15,6 +15,7 @@
 
 结果（paths.TRANSCRIPTS/<id>.json）：
   id / ts / source / file（原文件名）/ request / text / language / duration / segments[{start,end,text,speaker?}] / words[] / elapsed / cost
+  / audio（是否留了音频副本 <id>.m4a：单声道 AAC 64 kbps，一小时约 30 MB，回看时能点句播放，和记录一起删）
   id = 文件内容哈希 + 请求：同一个文件、同样的参数直接返回上次的结果。
 输出格式：txt / srt / vtt / json（render）。
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -129,7 +131,11 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
     cid = hashlib.sha1((_file_hash(src) + json.dumps(req, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()[:16]
     out = DIR / f"{cid}.json"
     if out.exists() and request.get("cache") is not False:
-        return {**json.loads(out.read_text()), "cached": True}
+        rec = json.loads(out.read_text())
+        if record and not rec.get("audio") and _keep_audio(src, cid):   # 旧记录没留音频：这次顺手补上
+            rec["audio"] = True
+            out.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
+        return {**rec, "cached": True}
     eng = hub._engine(m)
     t = time.time()
     with tempfile.TemporaryDirectory(prefix="vox-stt-") as work:
@@ -163,10 +169,33 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
     if not record:
         return rec
     DIR.mkdir(parents=True, exist_ok=True)
+    rec["audio"] = _keep_audio(src, cid)
     tmp = out.with_suffix(".tmp")
     tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
     tmp.replace(out)
     return rec
+
+
+def _keep_audio(src: Path, cid: str) -> bool:
+    """留一份压缩音频，回看转写时能点句播放。失败不影响转写本身。"""
+    DIR.mkdir(parents=True, exist_ok=True)
+    dst, tmp = DIR / f"{cid}.m4a", DIR / f"{cid}.tmp.m4a"
+    try:
+        audio._ff()
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", str(tmp)], capture_output=True)
+        if r.returncode or not tmp.exists():
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(dst)
+        return True
+    except (OSError, SystemExit):
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+def audio_path(cid: str) -> Path | None:
+    f = DIR / f"{cid}.m4a"
+    return f if len(cid) == 16 and all(c in "0123456789abcdef" for c in cid) and f.exists() else None
 
 
 # ---------- 记录 ----------
@@ -178,7 +207,7 @@ def records(limit: int | None = None) -> list[dict]:
             r = json.loads(f.read_text())
         except ValueError:
             continue
-        out.append({k: r.get(k) for k in ("id", "ts", "source", "file", "request", "language", "duration", "elapsed", "cost", "timed")}
+        out.append({k: r.get(k) for k in ("id", "ts", "source", "file", "request", "language", "duration", "elapsed", "cost", "timed", "audio")}
                    | {"preview": " ".join(r.get("text", "").split("\n"))[:120], "speakers": len({s.get("speaker") for s in r.get("segments", []) if s.get("speaker")})})
     out.sort(key=lambda r: r["ts"] or 0, reverse=True)
     return out[:limit] if limit else out
@@ -194,6 +223,7 @@ def get(cid: str) -> dict:
 def delete(cid: str) -> dict:
     get(cid)
     (DIR / f"{cid}.json").unlink()
+    (DIR / f"{cid}.m4a").unlink(missing_ok=True)
     return {"id": cid, "deleted": True}
 
 

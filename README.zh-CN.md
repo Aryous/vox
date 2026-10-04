@@ -16,7 +16,7 @@
 - **本地模型，离线运行。** Qwen3-TTS（CustomVoice 和 VoiceDesign，`mlx-community` 发布的各尺寸、各量化版本）和 Kokoro-82M 中文版。下载时逐个文件按 HuggingFace 的哈希校验。
 - **云端 Provider，同一套接口。** OpenRouter 加 10 家厂商（见下表）。各家的差异，比如情绪指令放哪、语速范围、音频是 base64 / hex / 临时链接 / 分块返回，都由适配器处理。
 - **自定义 Provider。** 接入任何 OpenAI 兼容的语音服务：自己部署的 Kokoro-FastAPI、代理、vox 还没收录的厂商，或者另一台 vox。
-- **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、MOSS-Transcribe-Diarize、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`。网页上有「转写」页：拖进文件、选模型和热词，结果按说话人分色显示，刚上传的文件可以点句子跳到对应位置播放，可复制或导出字幕；没有识别模型时，页面里直接下载并显示进度。模型支持时还能区分说话人、给出逐词时间戳；本地的 MOSS 能一次分出说话人和分句时间，适合会议、访谈、问诊录音。
+- **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、MOSS-Transcribe-Diarize、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`。网页上有「转写」页：拖进文件、选模型和热词，左边是转写记录，右边读选中的那条：按说话人分色、可全文查找，点句子跳到对应位置播放，播放时当前句跟着走（转写时留一份压缩音频，一小时约 30 MB，和记录一起删），可复制或导出字幕；没有识别模型时，页面里直接下载并显示进度。模型支持时还能区分说话人、给出逐词时间戳；本地的 MOSS 能一次分出说话人和分句时间，适合会议、访谈、问诊录音。
 - **克隆音色。** 上传或直接录一段 10–20 秒的声音，就能用这个声音说任何话：`vox clones add 录音.m4a -n 我的声音`，之后 `vox say "你好" -v clone:我的声音`。录音的文字稿由本地识别自动生成。同一个克隆音色可以给本地模型（Qwen3-TTS Base、VoxCPM2、OmniVoice）用，也可以给云端模型（Gemini、ElevenLabs、MiniMax……）用：用云端时，vox 第一次替你上传，记下对方的音色 ID 之后复用；收费的厂商会先说明费用、等你确认。
 - **先听再选。** 音色库里每个音色都读同一段样本；试音台：一段文字配一个或几个声音，一键同时生成（先给费用预估），并排听；新声音沿用当前的语气、语速和种子，比较时只差音色或模型；想单独调其中一个，就「复制一份」再改，和原来的并排比。满意的存为预设，命令行和 API 里直接用。
 

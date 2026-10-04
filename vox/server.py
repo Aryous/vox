@@ -51,7 +51,7 @@ response_format：json（默认）/ text / srt / vtt / verbose_json（分句与�
 
 ## 原生 API（JSON）
 POST /api/transcribe             multipart：file + model / language / prompt / hotwords（逗号分隔）/ words / diarize / cache；返回完整转写记录
-GET  /api/transcripts?limit=     转写记录；GET /api/transcripts/<id>?format=txt|srt|vtt|json 全文或导出；POST /api/transcripts/delete {{"id"}}
+GET  /api/transcripts?limit=     转写记录；GET /api/transcripts/<id>?format=txt|srt|vtt|json 全文或导出；GET /api/transcripts/<id>/audio 原音频（压缩副本）；POST /api/transcripts/delete {{"id"}}
 GET  /api/models                 模型与状态（not_downloaded / downloading / ready / loaded / needs_key），mine 表示在已添加的模型里
 POST /api/models/add {{"model"}} 或 {{"provider","remote"}}   添加模型（本地 = 开始下载）；GET /api/models/pull?model= 查下载进度
 POST /api/models/remove {{"model","delete_files"?}}   移除模型（本地要 delete_files: true，会删除模型文件）
@@ -111,7 +111,23 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _file(self, f: Path, ctype: str, extra: dict | None = None, cache=True):
         data = f.read_bytes()
-        self.send_response(200)
+        # 支持 Range：长音频点句跳转时浏览器按区间取，没有它 Chrome 跳不到没缓冲的位置
+        rg = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
+        if rg and (rg[1] or rg[2]):
+            n = len(data)
+            a, b = (int(rg[1]), int(rg[2]) if rg[2] else n - 1) if rg[1] else (max(0, n - int(rg[2])), n - 1)
+            if a >= n:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{n}")
+                self.end_headers()
+                return
+            b = min(b, n - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {a}-{b}/{n}")
+            data = data[a:b + 1]
+        else:
+            self.send_response(200)
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         if cache:
@@ -175,6 +191,10 @@ class Handler(SimpleHTTPRequestHandler):
         }
         if p in routes:
             return self._run(routes[p])
+        m = re.fullmatch(r"/api/transcripts/([0-9a-f]{16})/audio", p)
+        if m:
+            f = stt.audio_path(m[1])
+            return self._file(f, "audio/mp4", cache=False) if f else self.send_error(404)
         m = re.fullmatch(r"/api/transcripts/([0-9a-f]{16})", p)
         if m:
             return self._run(lambda: self._transcript(m[1], q.get("format", "json"), bool(q.get("download"))))

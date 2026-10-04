@@ -683,11 +683,13 @@ class STTTest(unittest.TestCase):
         self.assertGreater(r1["duration"], 0.2)                                  # 时长来自转换后的 wav
         self.assertEqual(self.stt.get(r1["id"])["text"], "测试一下")
         self.assertIn(r1["id"], [x["id"] for x in self.stt.records()])
+        self.assertTrue(r1["audio"]); self.assertIsNotNone(self.stt.audio_path(r1["id"]))   # 留了音频副本，回看能播放
         self.assertEqual(self.stt.render(r1, "txt"), "测试一下\n")
         with self.assertRaises(hub.VoxError) as e:
             self.stt.render(r1, "srt")                                            # Qwen3-ASR 只有分块、没有分句：不假装能出字幕
         self.assertIn("whisper-turbo", str(e.exception))
         self.stt.delete(r1["id"])
+        self.assertIsNone(self.stt.audio_path(r1["id"]))                         # 音频和记录一起删
         with self.assertRaises(hub.VoxError):
             self.stt.get(r1["id"])
 
