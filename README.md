@@ -1,7 +1,7 @@
 # vox
 
-**One interface for every TTS model — local and cloud.**
-Manage text-to-speech models the way LM Studio manages LLMs, and call any of them through one API the way OpenRouter does.
+**One interface for speech models — text-to-speech and speech-to-text, local and cloud.**
+Manage voice models the way LM Studio manages LLMs, and call any of them through one API the way OpenRouter does.
 
 English · [中文](README.zh-CN.md)
 
@@ -16,6 +16,7 @@ English · [中文](README.zh-CN.md)
 - **Local models, offline.** Qwen3-TTS (CustomVoice and VoiceDesign, every size and quantization published by `mlx-community`) and Kokoro-82M (Chinese). Downloads are verified file by file against HuggingFace hashes.
 - **Cloud providers, same interface.** OpenRouter plus ten providers (list below). Per-provider quirks — where the emotion prompt goes, speed ranges, base64/hex/URL/chunked audio — are handled by adapters so you don't have to.
 - **Custom providers.** Plug in any OpenAI-compatible speech service: a self-hosted Kokoro-FastAPI, a proxy, a vendor vox doesn't know yet, or another vox.
+- **Speech-to-text, same model system.** `vox transcribe meeting.m4a` turns audio or video into text or subtitles (txt / srt / vtt / json) with local models (Qwen3-ASR, MOSS-Transcribe-Diarize, SenseVoice, Fun-ASR, Whisper — all through MLX) or cloud ones; OpenAI-compatible `POST /v1/audio/transcriptions`. The web UI has a Transcribe page: drop a file, pick a model and hotwords, read the result colour-coded by speaker, click a sentence to play the just-uploaded file from there, copy it or export subtitles; with no speech-to-text model yet, it downloads one in place and shows progress. Speaker labels and word timestamps where the model supports them — locally, MOSS labels speakers and sentence timings in one pass, good for meetings, interviews and doctor visits.
 - **Hear before you choose.** A voice library where every voice reads the same sample line; a playground with a compare mode: one text, one shared set of tone / speed / seed, and a list of voices or models generated side by side in one click (cost estimate first). Want to tweak one of them? Make a variant of it and compare the two.
 
 | Voice library | Models and providers |
@@ -27,7 +28,7 @@ English · [中文](README.zh-CN.md)
 - macOS on Apple Silicon for local models (they run on [MLX](https://github.com/ml-explore/mlx)). Cloud and custom providers are plain HTTP, but only macOS is tested.
 - Python 3.10+ (3.12 recommended) and [uv](https://docs.astral.sh/uv/).
 - `ffmpeg` (`brew install ffmpeg`) for format conversion and speed changes.
-- Optional: [`coli`](https://www.npmjs.com/package/@marswave/coli) for the pronunciation check (local ASR). Everything else works without it.
+- The pronunciation check uses a local speech-to-text model (for example `vox models add qwen3-asr`); [`coli`](https://www.npmjs.com/package/@marswave/coli) still works as a fallback.
 
 ## Install
 
@@ -43,7 +44,7 @@ For development:
 ```bash
 git clone https://github.com/Aryous/vox && cd vox
 uv venv --python 3.12 && uv pip install -e .
-.venv/bin/python tests/test_providers.py     # 39 offline tests, ~1 s
+.venv/bin/python tests/test_providers.py     # 48 offline tests, ~1 s
 ```
 
 ## Quick start
@@ -54,6 +55,9 @@ vox models add qwen3                      # download Qwen3-TTS CustomVoice 1.7B 
 vox say "Hello from vox." -m qwen3 -v ryan -o hello.mp3 --play
 vox say "今天天气不错。" -m qwen3 -v serena -i "cheerful" --seed 42 --play
 vox voices -m qwen3                       # voices of a model
+vox models add qwen3-asr                  # local speech-to-text (Qwen3-ASR 0.6B, ≈1 GB)
+vox models add moss                       # local speech-to-text with speaker labels (MOSS-Transcribe-Diarize 0.9B, ≈1.3 GB)
+vox transcribe meeting.m4a -o meeting.txt # audio / video → text; -o talk.srt for subtitles (needs a model with timestamps)
 vox serve --open                          # web UI + API
 ```
 
@@ -89,6 +93,18 @@ Identical requests return the cached take; pass `cache: false` (CLI `--no-cache`
 
 ⚠️ **Experimental** means the adapter is written from the provider's official docs and covered by offline tests that replay the documented requests and responses, and the real endpoint answered a deliberately invalid key with an authentication error — but it hasn't been run with a real key yet. If you have one, please try it and open an issue either way.
 
+Speech-to-text models (`vox models --task stt --all`):
+
+| Source | Models | Status |
+| --- | --- | --- |
+| Local | Qwen3-ASR 0.6B (text), MOSS-Transcribe-Diarize 0.9B (text, speakers, sentence timings) | ✅ tested (17-minute multi-speaker Chinese conversation) |
+| Local | Qwen3-ASR 1.7B, SenseVoice Small, Fun-ASR-Nano, Whisper large-v3-turbo | ⚠️ registered, not yet tried |
+| OpenAI | `gpt-transcribe`, `gpt-4o-transcribe-diarize` (speaker labels), `whisper-1` | ⚠️ experimental |
+| SiliconFlow | SenseVoice Small (free) | ⚠️ experimental |
+| Custom | any OpenAI-compatible transcription service | ✅ tested against a local mock |
+
+*Experimental* for cloud speech-to-text: written from the official docs and covered by offline tests, but not yet run with a real key.
+
 Where a provider publishes a model list, `vox models fetch <provider>` (or "在线查询" in the UI) pulls the current list. Models that aren't in vox's registry borrow the request format of a known model from the same provider and are marked as *inferred*.
 
 ### Keys
@@ -119,6 +135,9 @@ vox calls `POST {base}/audio/speech`, reads models from `GET {base}/models` and 
 | Emotion / voice description | `-i` | `instructions` | `"cheerful"`; for VoiceDesign models, a description of the voice |
 | Speed | `-s` | `speed` | `0.25`–`4` |
 | Seed | `--seed` | `seed` | reproducible takes on models that support it |
+| Language hint (STT) | `-l` | `language` | `zh`, `en`; empty = auto-detect |
+| Hotwords / context (STT) | `--hotwords` / `--prompt` | `hotwords` / `prompt` | sent only to models that support them |
+| Speakers / word timings (STT) | `--diarize` / `--words` | `diarize` / `words` | an error, not a silent no-op, on models that can't |
 
 ## CLI
 
@@ -131,6 +150,8 @@ vox calls `POST {base}/audio/speech`, reads models from `GET {base}/models` and 
 | `vox voices` · `vox sample <ref> --play` | browse voices · hear a voice's sample |
 | `vox say <text>` | synthesize (`-` reads stdin; `-o file.mp3`; `--play`) |
 | `vox batch script.json` | multi-voice script → audio files, redoing only lines that changed |
+| `vox transcribe <files>` | speech-to-text (`-m`, `-l zh`, `--hotwords`, `--diarize`, `--words`, `-f txt\|srt\|vtt\|json`, `-o`) |
+| `vox transcripts [show\|rm]` | transcription records, shared with the web UI |
 | `vox history [--star]` | history, shared with the web UI |
 | `vox keys` · `vox providers` | credentials · providers, including custom ones |
 | `vox serve` · `vox status` | web UI + API · server status and file locations |
@@ -141,7 +162,7 @@ When the server is running, `say`, `sample`, `load` and `unload` go through it a
 
 | | Location | Contents |
 | --- | --- | --- |
-| Data | `~/.vox` | synthesized clips, samples, history, saved voices, settings, my models, custom providers |
+| Data | `~/.vox` | synthesized clips, transcripts, samples, history, saved voices, settings, my models, custom providers |
 | Models | `~/.vox/models` | local model files (excluded from Time Machine; they can be downloaded again) |
 | Cache | `~/Library/Caches/vox` (`~/.cache/vox` elsewhere) | live model lists, cloud voice lists, registry updates — safe to delete |
 | Keys | `~/.config/vox/credentials.json` | mode 600; environment variables take precedence |

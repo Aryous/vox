@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-09-24",
+ "updated": "2026-10-03",
  "about": "vox 模型注册表：Provider 的连接与适配器配置、已核对的模型元数据（能力、价格、音色）。这是数据，不是代码；新模型优先来自各家的在线列表，注册表只补接口给不了的信息，并作为离线兜底。字段说明见 vox/catalog.py。",
  "providers": {
   "local": {
@@ -112,6 +112,31 @@
    "discover": {
     "kind": "openai_models",
     "match": "tts"
+   },
+   "stt": {
+    "docs": "https://developers.openai.com/api/docs/guides/speech-to-text",
+    "compat": {
+     "max_mb": 25,
+     "formats": [
+      "flac",
+      "mp3",
+      "mp4",
+      "mpeg",
+      "mpga",
+      "m4a",
+      "ogg",
+      "opus",
+      "wav",
+      "webm"
+     ]
+    },
+    "model_defaults": {
+     "languages": [
+      "多语言"
+     ],
+     "license": "商用 API",
+     "family": "OpenAI 转写"
+    }
    }
   },
   "inworld": {
@@ -382,6 +407,23 @@
      "asr",
      "telespeech"
     ]
+   },
+   "stt": {
+    "docs": "https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions",
+    "compat": {
+     "max_mb": 25
+    },
+    "model_defaults": {
+     "languages": [
+      "中文",
+      "英语",
+      "粤语",
+      "日语",
+      "韩语"
+     ],
+     "license": "商用 API",
+     "family": "硅基流动转写"
+    }
    }
   },
   "mimo": {
@@ -2797,5 +2839,231 @@
     "description": "粤语"
    }
   ]
- }
+ },
+ "stt_models": [
+  {
+   "id": "local/qwen3-asr",
+   "alias": "qwen3-asr",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "Qwen3-ASR 0.6B · 8bit",
+   "family": "Qwen3-ASR",
+   "params_b": 0.6,
+   "quant": "MLX 8bit",
+   "size_gb": 1.01,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-ASR-0.6B-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
+   "languages": [
+    "中文",
+    "英语",
+    "粤语",
+    "日语",
+    "韩语",
+    "多语言"
+   ],
+   "caps": {
+    "prompt": true,
+    "hotwords": true
+   },
+   "about": "通义千问开源的识别模型，中英兼顾，支持 22 种中文方言和热词。整段文本，暂无分句时间戳。"
+  },
+  {
+   "id": "local/qwen3-asr-1.7b",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "Qwen3-ASR 1.7B · 8bit",
+   "family": "Qwen3-ASR",
+   "params_b": 1.7,
+   "quant": "MLX 8bit",
+   "size_gb": 2.47,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-ASR-1.7B-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+   "languages": [
+    "中文",
+    "英语",
+    "粤语",
+    "日语",
+    "韩语",
+    "多语言"
+   ],
+   "caps": {
+    "prompt": true,
+    "hotwords": true
+   },
+   "about": "同上的大尺寸，更准、更慢、更占内存。"
+  },
+  {
+   "id": "local/moss-diarize",
+   "alias": "moss",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "MOSS-Transcribe-Diarize 0.9B · 8bit",
+   "family": "MOSS-Transcribe-Diarize",
+   "params_b": 0.9,
+   "quant": "MLX 8bit（社区转换）",
+   "size_gb": 1.27,
+   "license": "Apache-2.0",
+   "repo": "vanch007/mlx-MOSS-Transcribe-Diarize-8bit",
+   "homepage": "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize",
+   "languages": [
+    "中文",
+    "英语",
+    "多语言"
+   ],
+   "caps": {
+    "segments": true,
+    "diarize": true,
+    "hotwords": true
+   },
+   "prompt_format": {
+    "base": "请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。",
+    "hotwords": "热词提示：{}"
+   },
+   "tokens_per_sec": 20,
+   "about": "复旦 OpenMOSS 开源，一次给出文字、说话人（S01、S02…）和分句时间戳，单个文件最长 90 分钟，适合会议、访谈、问诊。比 Qwen3-ASR 慢（17 分钟录音约 6 分钟）；对话很快、抢话时说话人可能分错。MLX 版为社区转换（vanch007）。"
+  },
+  {
+   "id": "local/sensevoice",
+   "alias": "sensevoice",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "SenseVoice Small",
+   "family": "SenseVoice",
+   "size_gb": 0.94,
+   "license": "FunASR 模型许可（可商用，需署名）",
+   "repo": "mlx-community/SenseVoiceSmall",
+   "homepage": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+   "languages": [
+    "中文",
+    "粤语",
+    "英语",
+    "日语",
+    "韩语"
+   ],
+   "caps": {},
+   "about": "非自回归，极快；附带情绪和声音事件。精度低于 Qwen3-ASR。"
+  },
+  {
+   "id": "local/fun-asr-nano",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "Fun-ASR-Nano · 8bit",
+   "family": "Fun-ASR",
+   "params_b": 0.8,
+   "quant": "MLX 8bit",
+   "size_gb": 1.56,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Fun-ASR-Nano-2512-8bit",
+   "homepage": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "方言"
+   ],
+   "caps": {
+    "hotwords": true
+   },
+   "about": "通义 Fun-ASR 的小尺寸开源版，支持热词。"
+  },
+  {
+   "id": "local/whisper-turbo",
+   "alias": "whisper-turbo",
+   "provider": "local",
+   "engine": "mlx-stt",
+   "name": "Whisper large-v3-turbo",
+   "family": "Whisper",
+   "params_b": 0.8,
+   "size_gb": 1.61,
+   "license": "MIT",
+   "repo": "mlx-community/whisper-large-v3-turbo",
+   "homepage": "https://huggingface.co/openai/whisper-large-v3-turbo",
+   "languages": [
+    "多语言"
+   ],
+   "caps": {
+    "segments": true,
+    "prompt": true
+   },
+   "about": "OpenAI 开源，99 种语言，带分句时间戳（能直接出字幕）。中文明显弱于 Qwen3-ASR，静音处可能编出内容。"
+  },
+  {
+   "provider": "openai",
+   "remote": "gpt-transcribe",
+   "name": "GPT Transcribe",
+   "caps": {
+    "prompt": true
+   },
+   "compat": {
+    "response": "json"
+   },
+   "price": {
+    "amount": 0.0045,
+    "currency": "USD",
+    "per": 1,
+    "unit": "minute"
+   },
+   "recommended": true,
+   "about": "OpenAI 当前推荐的转写模型。只返回文本，没有时间戳。"
+  },
+  {
+   "provider": "openai",
+   "remote": "gpt-4o-transcribe-diarize",
+   "name": "GPT-4o Transcribe Diarize",
+   "caps": {
+    "segments": true,
+    "diarize": true
+   },
+   "compat": {
+    "response": "diarized_json",
+    "chunking": "auto"
+   },
+   "price": {
+    "amount": 0.006,
+    "currency": "USD",
+    "per": 1,
+    "unit": "minute"
+   },
+   "about": "区分说话人，带分句时间戳。2027-02-26 下线。"
+  },
+  {
+   "provider": "openai",
+   "remote": "whisper-1",
+   "name": "Whisper（API）",
+   "caps": {
+    "segments": true,
+    "words": true,
+    "prompt": true
+   },
+   "compat": {
+    "response": "verbose_json"
+   },
+   "price": {
+    "amount": 0.006,
+    "currency": "USD",
+    "per": 1,
+    "unit": "minute"
+   },
+   "about": "带分句和逐词时间戳。2027-02-26 下线。"
+  },
+  {
+   "provider": "siliconflow",
+   "remote": "FunAudioLLM/SenseVoiceSmall",
+   "name": "SenseVoice Small（硅基）",
+   "caps": {},
+   "compat": {
+    "response": "json"
+   },
+   "price": {
+    "amount": 0,
+    "currency": "CNY",
+    "per": 1,
+    "unit": "minute"
+   },
+   "recommended": true,
+   "about": "免费。只返回文本。"
+  }
+ ]
 }

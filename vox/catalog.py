@@ -1,7 +1,12 @@
 """模型目录：从注册表数据、在线列表和用户添加的条目，组装出 vox 认识的全部模型。
 
+两类任务（模型的 task 字段）：
+  tts   语音合成：文字 → 声音（vox say / POST /v1/audio/speech）
+  stt   语音识别：声音 → 文字（vox transcribe / POST /v1/audio/transcriptions）
+  两类模型共用同一套 Provider、凭证、「我的模型」、下载与加载；各自的能力（caps）和参数（params）不同。
+
 统一命名（CLI、HTTP、WebUI 共用）：
-  模型 ID    提供方/模型，如 local/qwen3、openai/gpt-4o-mini-tts；本地模型也接受短名 qwen3
+  模型 ID    提供方/模型，如 local/qwen3、openai/gpt-4o-mini-tts、local/qwen3-asr；本地模型也接受短名 qwen3
   音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；自定义音色为 my:<id>
   请求参数   model / input / voice / instructions / speed / seed / lang / temperature / top_p / top_k / repetition_penalty
 
@@ -22,6 +27,11 @@
                    adapter / key_env / compat（适配器配置）/ model_defaults（该家模型的公共字段）/ discover（在线列表怎么查）
   models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
                    recommended（连接后默认加进「我的模型」）/ about / languages …
+  stt_models[]     语音识别模型，字段同上（没有音色）。单独成表：旧版 vox 拉到新注册表时只认 models，不会把识别模型当成合成模型
+                   本地识别模型另有两个可选字段：
+                   prompt_format   {"base", "hotwords"}：模型要求的指令写法（如 MOSS 的分说话人指令，热词按 "热词提示：{}" 接在后面）
+                   tokens_per_sec  每秒音频最多生成多少 token（一次读完整段的模型要按时长放宽上限，否则长音频会被截断）
+  providers.<id>.stt   这家语音识别的配置：adapter / compat / model_defaults（缺省沿用这家的合成配置）
   voice_sets       可复用的静态音色表
 
 自定义 Provider（~/.vox/providers.json）：用户自己加的服务，比如本机的 Kokoro-FastAPI、代理、新厂商。
@@ -43,7 +53,11 @@ DISCOVERED = paths.DISCOVERED           # 在线列表缓存
 PREFS = paths.MY_MODELS                 # 用户的模型清单：我的模型、手动添加
 
 GEN = ("temperature", "top_p", "top_k", "repetition_penalty")
+TASKS = ("tts", "stt")
+CONNECTION = ("base", "base_env", "auth")   # 两类任务共用的连接配置
 BASE_CAPS = {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True}
+# 识别模型的能力：segments 分句时间戳（能做字幕）/ words 逐词时间戳 / diarize 区分说话人 / detect 自动识别语种 / prompt 上下文提示 / hotwords 热词
+STT_CAPS = {"segments": False, "words": False, "diarize": False, "detect": True, "prompt": False, "hotwords": False}
 TEMPLATE_DROP = ("id", "alias", "name", "recommended", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
 
 REG: dict = {}
@@ -92,11 +106,22 @@ def voice_list(ref) -> list[dict] | str:
     return out
 
 
+def task_view(p: dict, task: str) -> dict:
+    """Provider 在某个任务下的配置：识别任务用 p["stt"] 里的覆盖项，其余沿用这家的合成配置（同一个 Key、同一个地址）。"""
+    if task != "stt":
+        return p
+    st = p.get("stt") or {}
+    conn = {k: v for k, v in p.get("compat", {}).items() if k in CONNECTION}   # 只继承连接方式，合成专用的参数（音色前缀、采样率……）不带过来
+    return {**p, "adapter": st.get("adapter", p.get("adapter")), "compat": {**conn, **st.get("compat", {})},
+            "model_defaults": st.get("model_defaults", {}), "discover": st.get("discover")}
+
+
 def materialize(entry: dict, source: str, templates: dict | None = None) -> dict | None:
     """把注册表 / 在线列表 / 用户添加的条目补全成完整的模型字典。Provider 未知或没有可用的适配器时返回 None。"""
     pid = entry.get("provider")
-    p = PROVIDERS.get(pid)
-    if not p:
+    task = entry.get("task", "tts")
+    p = task_view(PROVIDERS.get(pid) or {}, task) if PROVIDERS.get(pid) else None
+    if not p or task not in TASKS:
         return None
     tpl = (templates or {}).get(entry.get("template")) if entry.get("template") else None
     if tpl:
@@ -104,8 +129,8 @@ def materialize(entry: dict, source: str, templates: dict | None = None) -> dict
         caps = dict(tpl["caps"])
     else:
         base = copy.deepcopy(p.get("model_defaults", {}))
-        caps = {**BASE_CAPS, **base.pop("caps", {})}
-    m = {**base, **{k: v for k, v in copy.deepcopy(entry).items() if k != "template"}}
+        caps = {**(STT_CAPS if task == "stt" else BASE_CAPS), **base.pop("caps", {})}
+    m = {**base, **{k: v for k, v in copy.deepcopy(entry).items() if k != "template"}, "task": task}
     m["caps"] = {**caps, **entry.get("caps", {})}
     m.setdefault("languages", ["多语言"])
     if p["kind"] == "cloud":
@@ -122,9 +147,14 @@ def materialize(entry: dict, source: str, templates: dict | None = None) -> dict
         if not m.get("id"):
             return None
     m.setdefault("name", m.get("remote") or m["id"].split("/", 1)[-1])
-    m["voices"] = voice_list(m.get("voices"))
-    if m["voices"] != "engine":
-        m.setdefault("default_voice", (m["voices"][0]["voice"] if m["voices"] else None))
+    if task == "stt":   # 识别模型没有音色
+        m["voices"], m["default_voice"] = [], None
+        m["caps"]["voices"] = False
+        m.setdefault("params", ["language"] + [k for k in ("prompt", "hotwords") if m["caps"].get(k)])
+    else:
+        m["voices"] = voice_list(m.get("voices"))
+        if m["voices"] != "engine":
+            m.setdefault("default_voice", (m["voices"][0]["voice"] if m["voices"] else None))
     m["source"] = source
     m["inferred"] = False if p.get("custom") else entry.get("inferred", bool(entry.get("template")) and not entry.get("caps"))   # 自定义 Provider 的能力是用户声明的
     return m
@@ -166,11 +196,13 @@ def custom_provider(pid: str, cfg: dict) -> dict:
             "console": cfg.get("console") or None, "docs": cfg.get("docs") or None,
             "adapter": t["adapter"], "key_env": env, "compat": compat, "config": cfg,
             "discover": {"kind": "openai_models", "public": not needs_key, **({"match": cfg["model_filter"].lower()} if cfg.get("model_filter") else {})},
-            "model_defaults": {"caps": caps, "params": params, "voices": voices, "languages": ["多语言"], "license": "自定义", "family": cfg.get("name") or pid}}
+            "model_defaults": {"caps": caps, "params": params, "voices": voices, "languages": ["多语言"], "license": "自定义", "family": cfg.get("name") or pid},
+            # 同一个服务的 /audio/transcriptions：手动添加识别模型时用（vox models add <id>/<模型> --task stt）
+            "stt": {"compat": {"response": "json"}, "model_defaults": {"languages": ["多语言"], "license": "自定义", "family": cfg.get("name") or pid}}}
 
 
 def rebuild():
-    """重新组装 MODELS：注册表 → 在线列表缓存 → 用户手动添加；同一个模型只保留最先出现的（注册表优先）。"""
+    """重新组装 MODELS：注册表 → 用户手动添加 → 在线列表缓存；同一个模型只保留最先出现的（注册表优先）。"""
     global REG
     REG = load_registry()
     PROVIDERS.clear()
@@ -191,19 +223,23 @@ def rebuild():
             out.append(m)
 
     for e in REG["models"]:
-        add(materialize(e, "registry"))
+        add(materialize({**e, "task": "tts"}, "registry"))
+    for e in REG.get("stt_models", []):
+        add(materialize({**e, "task": "stt"}, "registry"))
     templates = {m["id"]: m for m in out}
-    for pid in PROVIDERS:   # 模板默认用同家第一个注册表模型
-        first = next((m for m in out if m["provider"] == pid), None)
-        if first:
-            templates.setdefault(f"{pid}:*", first)
+    for pid in PROVIDERS:   # 模板默认用同家同任务的第一个注册表模型：{pid}:*（合成）、{pid}:stt:*（识别）
+        for task in TASKS:
+            first = next((m for m in out if m["provider"] == pid and m["task"] == task), None)
+            if first:
+                templates.setdefault(tpl_key(pid, task), first)
+    # 用户手动添加的排在在线列表前面：在线列表只给模型 ID，是合成还是识别靠猜；用户明确说过的以用户为准
+    for e in _read(PREFS, {}).get("custom", []):
+        e = {**e, "template": e.get("template") or tpl_key(e.get("provider"), e.get("task", "tts"))}
+        add(materialize(e, "custom", templates))
     for f in sorted(DISCOVERED.glob("*.json")) if DISCOVERED.exists() else []:
         for e in _read(f, {}).get("items", []):
-            e = {**e, "template": e.get("template") or (f"{e.get('provider')}:*" if not e.get("caps") else None)}
+            e = {**e, "template": e.get("template") or (tpl_key(e.get("provider"), e.get("task", "tts")) if not e.get("caps") else None)}
             add(materialize(e, "discovered", templates))
-    for e in _read(PREFS, {}).get("custom", []):
-        e = {**e, "template": e.get("template") or f"{e.get('provider')}:*"}
-        add(materialize(e, "custom", templates))
     MODELS[:] = out
     _BY_ID.clear()
     for m in out:
@@ -211,6 +247,10 @@ def rebuild():
     for m in out:
         if m.get("alias"):
             _BY_ID.setdefault(m["alias"], m)
+
+
+def tpl_key(pid: str, task: str = "tts") -> str:
+    return f"{pid}:*" if task == "tts" else f"{pid}:{task}:*"
 
 
 def find_model(mid: str) -> dict | None:
@@ -229,11 +269,11 @@ def short(m: dict) -> str:
     return m.get("alias") or m["id"]
 
 
-def provider_template(pid: str, template: str | None = None) -> dict | None:
+def provider_template(pid: str, template: str | None = None, task: str = "tts") -> dict | None:
     """在线查到的新模型借用哪个已登记模型的配置。"""
     if template:
         return find_model(template)
-    return next((m for m in MODELS if m["provider"] == pid and m["source"] == "registry"), None)
+    return next((m for m in MODELS if m["provider"] == pid and m["task"] == task and m["source"] == "registry"), None)
 
 
 # ---------- WebUI / CLI 用的文案 ----------

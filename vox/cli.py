@@ -1,6 +1,6 @@
-"""vox：本地 TTS 命令行。与 WebUI / HTTP API 共用同一套模型 ID、音色引用和参数名；所有命令都支持 --json。
+"""vox：语音合成（TTS）与语音识别（STT）命令行。与 WebUI / HTTP API 共用同一套模型 ID、音色引用和参数名；所有命令都支持 --json。
 
-  vox models                      我的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家
+  vox models                      我的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家；--task stt 只看识别模型
   vox models fetch openrouter     在线查询这家现在提供的模型（local = HuggingFace）
   vox models add qwen3            加进我的模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
   vox models rm <模型 ID>          移出我的模型（本地要加 --delete-files，会删除模型文件）
@@ -10,12 +10,14 @@
   vox say "你好" -m qwen3 -v serena -i "轻快友好" -o hi.mp3 --play
   vox history --star              历史（与 WebUI 共享）
   vox batch script.json -o vo/    多角色脚本批量合成
+  vox transcribe 会议.m4a          语音识别（音频 / 视频）；-m qwen3-asr 选模型，-o 会议.srt 按扩展名导出字幕
+  vox transcripts                 转写记录；vox transcripts show <id> -f srt 导出
   vox keys set MINIMAX_API_KEY    配置云端 Provider 的 Key（输入不回显）
   vox providers add my-kokoro --base-url http://127.0.0.1:8880/v1 --no-key
                                   自定义 Provider（OpenAI 兼容：自建服务、代理、新厂商）
   vox serve --open                本地服务：WebUI + OpenAI 兼容 API
 
-vox 服务在运行时（默认 http://127.0.0.1:8765），say / sample / load / unload 会交给服务执行，直接用已加载的模型。
+vox 服务在运行时（默认 http://127.0.0.1:8765），say / transcribe / sample / load / unload 会交给服务执行，直接用已加载的模型。
 """
 from __future__ import annotations
 
@@ -125,7 +127,8 @@ def cmd_models(a):
         m = hub.catalog.find_model(tgt)
         if m and m["provider"] == "local" and _server("/api/status") is None:   # 没有服务在跑：本进程前台下载
             return _out(a, _call(hub.pull, tgt, False), lambda: None)
-        r = _server("/api/models/add", {"model": tgt, "name": a.name}) or _call(hub.add_model, tgt, name=a.name)
+        task = a.task or "tts"   # 只在手动添加未登记的云端模型时有意义：说明它是合成还是识别模型
+        r = _server("/api/models/add", {"model": tgt, "name": a.name, "task": task}) or _call(hub.add_model, tgt, name=a.name, task=task)
         if r.get("state"):   # 本地模型：开始下载
             return _out(a, r, lambda: print(f"↓ 开始下载 {r['model']}；进度：vox status，或在 WebUI 模型页查看"))
         return _out(a, r, lambda: print(f"✓ 已加进我的模型：{r['model']}"))
@@ -135,8 +138,8 @@ def cmd_models(a):
     if act == "update":
         r = _server("/api/registry/update", {"url": tgt}) or _call(hub.registry_update, tgt)
         return _out(a, r, lambda: print(f"{'✓ 已更新' if r['changed'] else '已是最新'}：注册表 {r['updated']}（{r['providers']} 家 Provider，{r['models']} 个登记模型）"))
-    qs = "&".join(x for x in (f"provider={a.provider}" if a.provider else "", "" if a.all else "mine=1") if x)
-    ms = _server("/api/models?" + qs) or hub.models(a.provider, None if a.all else True)
+    qs = "&".join(x for x in (f"provider={a.provider}" if a.provider else "", "" if a.all else "mine=1", f"task={a.task}" if a.task else "") if x)
+    ms = _server("/api/models?" + qs) or hub.models(a.provider, None if a.all else True, a.task)
     _out(a, ms, lambda: _print_models(ms) if ms else print("我的模型是空的。vox models --all 查看可以下载 / 添加的模型"))
 
 
@@ -147,11 +150,18 @@ def _call(fn, *args, **kw):
         raise SystemExit(f"✗ {e}")
 
 
+CAP_LABEL = {"tts": {"voices": "音色", "instructions": "指令", "design": "设计", "seed": "种子"},
+             "stt": {"segments": "分句", "words": "逐词", "diarize": "说话人", "hotwords": "热词", "prompt": "提示"}}
+
+
 def _print_models(ms):
+    both = len({m.get("task", "tts") for m in ms}) > 1
     for m in ms:
-        caps = "、".join(k for k, v in {"音色": m["caps"]["voices"], "指令": m["caps"]["instructions"], "设计": m["caps"]["design"], "种子": m["caps"]["seed"]}.items() if v)
+        task = m.get("task", "tts")
+        caps = "、".join(t for k, t in CAP_LABEL[task].items() if m["caps"].get(k))
         mark = "●" if m["mine"] else "○"
-        print(f"{mark} {m['id']:<44} {STATUS_LABEL.get(m['status'], m['status']):<5} {m['name']}  [{caps}]")
+        kind = ("识别 " if task == "stt" else "合成 ") if both else ""
+        print(f"{mark} {kind}{m['id']:<44} {STATUS_LABEL.get(m['status'], m['status']):<5} {m['name']}  [{caps}]")
 
 
 def cmd_pull(a):
@@ -210,6 +220,67 @@ def cmd_say(a):
         print(rec["file"])
     if a.play:
         subprocess.run(["afplay", rec["file"]])
+
+
+def _server_upload(path, file: Path, fields: dict):
+    """把本地文件以 multipart 上传给运行中的服务（和别的客户端走同一个接口）；没有服务在跑返回 None。"""
+    if os.environ.get("VOX_NO_SERVER") or not _server("/api/status"):
+        return None
+    from .providers.base import multipart
+
+    body, ctype = multipart([(k, "true" if v is True else str(v)) for k, v in fields.items() if v not in (None, False, "", [])], [("file", file)])
+    req = urllib.request.Request(SERVER + path, data=body, headers={"Content-Type": ctype}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"✗ {json.loads(e.read() or b'{}').get('error', str(e))}")
+
+
+def cmd_transcribe(a):
+    from . import stt
+
+    fmt = a.format or (Path(a.output).suffix.lstrip(".").lower() if a.output and not Path(a.output).is_dir() else "") or "txt"
+    if fmt not in stt.FORMATS:
+        raise SystemExit(f"✗ 不支持的格式 {fmt}，可选：{', '.join(stt.FORMATS)}")
+    files = [Path(f).expanduser() for f in a.files]
+    many = len(files) > 1
+    if many and a.output and not Path(a.output).is_dir():
+        raise SystemExit("✗ 多个文件时 -o 要写一个目录")
+    req = {"model": a.model, "language": a.language, "prompt": a.prompt, "hotwords": a.hotwords, "words": a.words, "diarize": a.diarize}
+    results = []
+    for f in files:
+        if not f.is_file():
+            raise SystemExit(f"✗ 找不到文件：{f}")
+        t = time.time()
+        rec = None if a.local else _server_upload("/api/transcribe", f, {**req, "source": "cli", **({"cache": "false"} if a.no_cache else {})})
+        rec = rec or _call(stt.transcribe, f, {**req, **({"cache": False} if a.no_cache else {})}, source="cli")
+        text = _call(stt.render, rec, fmt)
+        dest = (Path(a.output) / f"{f.stem}.{fmt}") if a.output and Path(a.output).is_dir() else Path(a.output) if a.output else None
+        if dest:
+            dest.write_text(text)
+        results.append({**rec, **({"output": str(dest)} if dest else {})})
+        if not a.json:
+            _log(f"✓ {f.name}：{rec['duration']:.1f}s 音频，{rec['request']['model']}，用时 {time.time() - t:.1f}s{'（缓存）' if rec.get('cached') else ''}"
+                 + (f"，{rec['cost']['text']}" if rec.get("cost") else "") + (f" → {dest}" if dest else ""))
+            if not dest:
+                print((f"== {f.name}\n" if many else "") + text, end="" if text.endswith("\n") else "\n")
+    if a.json:
+        print(json.dumps(results if many else results[0], ensure_ascii=False, indent=1))
+
+
+def cmd_transcripts(a):
+    from . import stt
+
+    if a.action == "show":
+        rec = _server(f"/api/transcripts/{a.id}") or _call(stt.get, a.id or "")
+        return print(_call(stt.render, rec, a.format or "txt"), end="")
+    if a.action == "rm":
+        r = _server("/api/transcripts/delete", {"id": a.id}) or _call(stt.delete, a.id or "")
+        return _out(a, r, lambda: print(f"✓ 已删除 {r['id']}"))
+    rs = _server(f"/api/transcripts?limit={a.limit}") or stt.records(a.limit)
+    _out(a, rs, lambda: [print(f"{r['id']}  {_pad(r['request']['model'], 32)} {r['duration'] or 0:7.1f}s  {_pad(r['file'][:20], 22)}  {r['preview'][:40]}") for r in rs]
+         if rs else print("还没有转写记录。vox transcribe <音频文件>"))
 
 
 def cmd_history(a):
@@ -406,6 +477,7 @@ def main(argv=None):
     s.add_argument("--all", action="store_true", help="也列出还不能用的（未下载、未连接、未添加）")
     s.add_argument("--name", help="手动添加时的显示名")
     s.add_argument("--delete-files", action="store_true", help="rm 本地模型时确认删除已下载的文件")
+    s.add_argument("--task", choices=["tts", "stt"], help="只看合成（tts）或识别（stt）模型；add 未登记的云端模型时说明它是哪一类")
     s.set_defaults(fn=cmd_models)
     s = J(sub.add_parser("pull", help="下载模型（ModelScope，按 HuggingFace 哈希校验）"))
     s.add_argument("model", help="模型 ID，如 qwen3、qwen3-design")
@@ -448,6 +520,26 @@ def main(argv=None):
     s.add_argument("-n", "--limit", type=int, default=20)
     s.add_argument("--star", action="store_true", help="只看收藏")
     s.set_defaults(fn=cmd_history)
+
+    s = J(sub.add_parser("transcribe", help="语音识别：音频 / 视频 → 文字或字幕"))
+    s.add_argument("files", nargs="+", help="音频或视频文件（ffmpeg 能读的都行）")
+    s.add_argument("-m", "--model", help="识别模型，如 qwen3-asr、whisper-turbo、openai/gpt-transcribe；不填用默认")
+    s.add_argument("-l", "--language", help="语种提示，如 zh、en；不填自动识别")
+    s.add_argument("--prompt", help="上下文提示（专有名词、前文），模型支持时才传")
+    s.add_argument("--hotwords", help="热词，逗号分隔，模型支持时才传")
+    s.add_argument("--words", action="store_true", help="要逐词时间戳（模型要支持）")
+    s.add_argument("--diarize", action="store_true", help="区分说话人（模型要支持）")
+    s.add_argument("-f", "--format", choices=["txt", "srt", "vtt", "json"], help="输出格式；不填按 -o 的扩展名，默认 txt")
+    s.add_argument("-o", "--output", help="输出文件；多个输入时写一个目录")
+    s.add_argument("--no-cache", action="store_true", help="不用缓存，重新识别")
+    s.add_argument("--local", action="store_true", help="不走运行中的服务，在本进程识别")
+    s.set_defaults(fn=cmd_transcribe)
+    s = J(sub.add_parser("transcripts", help="转写记录：list / show <id> / rm <id>"))
+    s.add_argument("action", nargs="?", choices=["list", "show", "rm"], default="list")
+    s.add_argument("id", nargs="?")
+    s.add_argument("-f", "--format", choices=["txt", "srt", "vtt", "json"], help="show 的输出格式")
+    s.add_argument("-n", "--limit", type=int, default=20)
+    s.set_defaults(fn=cmd_transcripts)
 
     J(sub.add_parser("status", help="服务与模型状态")).set_defaults(fn=cmd_status)
 

@@ -2,7 +2,7 @@
 
 按「丢了能不能找回」分四类：
 
-  数据  ~/.vox                        合成结果 clips/、音色样本 samples/、history.json、my_voices.json、
+  数据  ~/.vox                        合成结果 clips/、转写结果 transcripts/、音色样本 samples/、history.json、my_voices.json、
                                       settings.json、models.json（我的模型）、providers.json（自定义 Provider）。
                                       丢了找不回来，要进备份。
   模型  ~/.vox/models                 下载的本地模型。能重新下载，所以标记为不进 Time Machine 备份。
@@ -44,6 +44,7 @@ CONFIG = Path(os.environ.get("VOX_CONFIG", Path.home() / ".config" / "vox")).exp
 
 # 数据
 CLIPS = HOME / "clips"
+TRANSCRIPTS = HOME / "transcripts"   # 语音识别结果，每条一个 JSON（按文件内容 + 请求哈希命名）
 SAMPLES = HOME / "samples"
 HISTORY = HOME / "history.json"
 MY_VOICES = HOME / "my_voices.json"

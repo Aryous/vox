@@ -7,27 +7,31 @@
 """
 from __future__ import annotations
 
+import email.policy
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 import traceback
+from email.parser import BytesParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import audio, catalog, hub, paths
+from . import audio, catalog, hub, paths, stt
 
 WEB = Path(__file__).parent / "web"
+MAX_UPLOAD = 1 << 30   # 上传的音频 / 视频最大 1 GB（整个读进内存；更长的录音先切段或压缩）
 
 
 def llms_txt(base: str) -> str:
     ms = "\n".join(f"- {m['id']}{'（短名 ' + m['alias'] + '）' if m.get('alias') and m['alias'] != m['id'] else ''}：{m['name']}，参数 {', '.join(m['params'])}" for m in hub.models(mine=True))
     return f"""# vox
 
-> 本地 TTS 服务：统一接口调用多个 TTS 模型。OpenAI 兼容，CLI / HTTP / WebUI 用同一套模型 ID、音色 ID 和参数名。
+> 本地语音服务：统一接口调用多个语音合成（TTS）和语音识别（STT）模型。OpenAI 兼容，CLI / HTTP / WebUI 用同一套模型 ID、音色 ID 和参数名。
 
 ## 我的模型（能直接调用的）
 {ms}
@@ -39,7 +43,14 @@ POST {base}v1/audio/speech
 扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用，如 "qwen3:serena" 或 "my:<id>"。
 返回音频字节；响应头 X-Vox-Id、X-Vox-Seed、X-Vox-Duration。
 
+## 识别（OpenAI 兼容）
+POST {base}v1/audio/transcriptions   multipart：file（音频 / 视频）、model、language、prompt、response_format、timestamp_granularities[]
+response_format：json（默认）/ text / srt / vtt / verbose_json（分句与逐词时间戳）/ diarized_json（带说话人，需模型支持）
+不填 model 用默认识别模型。识别模型见 GET /api/models?task=stt。
+
 ## 原生 API（JSON）
+POST /api/transcribe             multipart：file + model / language / prompt / hotwords（逗号分隔）/ words / diarize / cache；返回完整转写记录
+GET  /api/transcripts?limit=     转写记录；GET /api/transcripts/<id>?format=txt|srt|vtt|json 全文或导出；POST /api/transcripts/delete {{"id"}}
 GET  /api/models                 模型与状态（not_downloaded / downloading / ready / loaded / needs_key），mine 表示在「我的模型」里
 POST /api/models/add {{"model"}} 或 {{"provider","remote"}}   加进我的模型（本地 = 开始下载）；GET /api/models/pull?model= 查下载进度
 POST /api/models/remove {{"model","delete_files"?}}   移出我的模型（本地要 delete_files: true，会删除模型文件）
@@ -59,6 +70,7 @@ GET  /v1/audio/voices?model=     音色列表（扩展，与 Kokoro-FastAPI 同�
 
 ## CLI 等价
 vox models --json | vox models --all | vox models fetch openrouter | vox models add <模型 ID> | vox voices -m qwen3 --json | vox say "你好" -m qwen3 -v serena -i "轻快友好" --json
+vox models --task stt --all | vox transcribe 会议.m4a -m qwen3-asr -o 会议.txt | vox transcribe 访谈.mp3 -m whisper-turbo -f srt | vox transcripts
 """
 
 
@@ -143,7 +155,8 @@ class Handler(SimpleHTTPRequestHandler):
                 {"id": m["id"], "object": "model", "created": 0, "owned_by": m["provider"], "status": m["status"]} for m in hub.models(mine=True)]}, openai=True)
         routes = {
             "/api/status": hub.status,
-            "/api/models": lambda: hub.models(q.get("provider"), {"1": True, "0": False}.get(q.get("mine", ""))),
+            "/api/models": lambda: hub.models(q.get("provider"), {"1": True, "0": False}.get(q.get("mine", "")), q.get("task")),
+            "/api/transcripts": lambda: stt.records(int(q["limit"]) if q.get("limit") else None),
             "/api/registry": hub.registry_info,
             "/api/models/pull": lambda: hub.pull_status(q.get("model", "")),
             "/api/voices": lambda: hub.voices(model=q.get("model"), lang=q.get("lang"), gender=q.get("gender"), q=q.get("q")),
@@ -155,6 +168,9 @@ class Handler(SimpleHTTPRequestHandler):
         }
         if p in routes:
             return self._run(routes[p])
+        m = re.fullmatch(r"/api/transcripts/([0-9a-f]{16})", p)
+        if m:
+            return self._run(lambda: self._transcript(m[1], q.get("format", "json"), bool(q.get("download"))))
         m = re.fullmatch(r"/(clips|samples)/([0-9a-f]{16})\.(wav|mp3|flac|opus|aac)", p)
         if m:
             f = (hub.CLIPS if m[1] == "clips" else hub.SAMPLES) / f"{m[2]}.wav"
@@ -162,7 +178,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_error(404)
             f = audio.convert(f, m[3])
             return self._file(f, audio.FORMATS[m[3]], {"Content-Disposition": f'inline; filename="vox-{m[2]}.{m[3]}"'})
-        if p in ("/voices", "/playground", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
+        if p in ("/voices", "/playground", "/transcribe", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
             self.path = "/index.html"
         return super().do_GET()
 
@@ -170,6 +186,12 @@ class Handler(SimpleHTTPRequestHandler):
         p = urlparse(self.path).path
         if p == "/v1/audio/speech":
             return self._run(self._openai_speech, openai=True)
+        if p == "/v1/audio/transcriptions":
+            return self._run(self._openai_transcribe, openai=True)
+        if p == "/api/transcribe":
+            return self._run(lambda: self._upload(lambda f, fn, form: stt.transcribe(f, {
+                **{k: form.get(k) for k in ("model", "language", "prompt", "hotwords", "words", "diarize")},
+                **({"cache": False} if str(form.get("cache")).lower() in ("false", "0") else {})}, source=form.get("source") or "webui", filename=fn)))
         routes = {
             "/api/speech": lambda b: self._speech_json(b),
             "/api/models/pull": lambda b: hub.pull(b.get("model", ""), background=True),
@@ -186,16 +208,95 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/voices/refresh": lambda b: {"model": b.get("model"), "count": hub.refresh_voices(b.get("model", ""))},
             "/api/estimate": lambda b: hub.estimate(hub.normalize(b)),
             "/api/providers/discover": lambda b: hub.discover(b.get("provider", "")),
-            "/api/models/add": lambda b: hub.add_model(b.get("model"), b.get("provider"), b.get("remote"), b.get("name")),
+            "/api/models/add": lambda b: hub.add_model(b.get("model"), b.get("provider"), b.get("remote"), b.get("name"), b.get("task") or "tts"),
             "/api/models/remove": lambda b: hub.remove_model(b.get("model", ""), bool(b.get("delete_files"))),
             "/api/registry/update": lambda b: hub.registry_update(b.get("url")),
             "/api/providers/add": lambda b: hub.provider_save(b.get("id", ""), b.get("config", {}), b.get("key"), bool(b.get("overwrite"))),
             "/api/providers/remove": lambda b: hub.provider_remove(b.get("id", "")),
             "/api/providers/test": lambda b: hub.provider_test(b.get("config"), b.get("id"), b.get("key")),
+            "/api/transcripts/delete": lambda b: stt.delete(b.get("id", "")),
         }
         if p not in routes:
             return self.send_error(404)
         self._run(lambda: routes[p](self._body()))
+
+    # ---- 上传与识别 ----
+    def _form(self):
+        """解析 multipart/form-data：返回 (字段 {名: 值，同名多值为列表}, 文件 {名: (文件名, 字节)})。"""
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.startswith("multipart/form-data"):
+            raise hub.VoxError("请用 multipart/form-data 上传，音频放在 file 字段")
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_UPLOAD:
+            raise hub.VoxError(f"文件太大（{n / 1e9:.1f} GB），上限 {MAX_UPLOAD / 1e9:.0f} GB；可以先切段或压缩")
+        msg = BytesParser(policy=email.policy.HTTP).parsebytes(f"Content-Type: {ctype}\r\n\r\n".encode() + self.rfile.read(n))
+        fields, files = {}, {}
+        for part in msg.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            data = part.get_payload(decode=True) or b""
+            if part.get_filename() is not None:
+                files[name] = (part.get_filename(), data)
+            else:
+                v = data.decode("utf-8", "replace")
+                if name in fields:   # 同名字段（如 timestamp_granularities[]）收成列表
+                    fields[name] = (fields[name] if isinstance(fields[name], list) else [fields[name]]) + [v]
+                else:
+                    fields[name] = v
+        return fields, files
+
+    def _upload(self, fn):
+        """上传的文件先落到临时目录（保留扩展名，ffmpeg 靠它判断格式），再交给 fn(路径, 原文件名, 字段)。"""
+        form, files = self._form()
+        if "file" not in files:
+            raise hub.VoxError("缺少 file 字段（要识别的音频或视频）")
+        name, data = files["file"]
+        with tempfile.TemporaryDirectory(prefix="vox-upload-") as d:
+            f = Path(d) / ("upload" + Path(name or "").suffix.lower()[:8])
+            f.write_bytes(data)
+            return fn(f, Path(name or "upload").name, form)
+
+    def _openai_transcribe(self):
+        def run(f, name, form):
+            fmt = form.get("response_format") or "json"
+            if fmt not in ("json", "text", "srt", "vtt", "verbose_json", "diarized_json"):
+                raise hub.VoxError(f"response_format 不支持 {fmt}")
+            gran = form.get("timestamp_granularities[]") or []
+            gran = gran if isinstance(gran, list) else [gran]
+            rec = stt.transcribe(f, {"model": form.get("model"), "language": form.get("language"), "prompt": form.get("prompt"),
+                                     "words": "word" in gran, "diarize": fmt == "diarized_json"}, source="api", filename=name)
+            if fmt in ("text", "srt", "vtt"):
+                body = stt.render(rec, "txt" if fmt == "text" else fmt).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/vtt; charset=utf-8" if fmt == "vtt" else "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("X-Vox-Id", rec["id"])
+                self.end_headers()
+                self.wfile.write(body)
+                return None
+            if fmt == "json":
+                return {"text": rec["text"]}
+            segs = [{"id": i, "start": s["start"], "end": s["end"], "text": s["text"], **({"speaker": s["speaker"]} if s.get("speaker") else {})}
+                    for i, s in enumerate(rec["segments"] if rec.get("timed") else [])]
+            if fmt == "diarized_json":
+                return {"text": rec["text"], "duration": rec["duration"], "segments": segs}
+            return {"task": "transcribe", "language": rec.get("language"), "duration": rec["duration"], "text": rec["text"], "segments": segs,
+                    **({"words": rec["words"]} if rec.get("words") else {})}
+        return self._upload(run)
+
+    def _transcript(self, cid, fmt, download):
+        rec = stt.get(cid)
+        if fmt == "json" and not download:
+            return rec
+        body = stt.render(rec, fmt).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", {"vtt": "text/vtt", "json": "application/json"}.get(fmt, "text/plain") + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        if download:
+            from urllib.parse import quote
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(Path(rec['file']).stem + '.' + fmt)}")
+        self.end_headers()
+        self.wfile.write(body)
+        return None
 
     def _speech_json(self, b):
         rec = hub.speak(b, source=b.pop("source", "webui") if isinstance(b, dict) else "webui")

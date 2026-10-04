@@ -1,14 +1,18 @@
 """云端适配器的公共部分：HTTP、错误、凭证、音色缓存、参数换算。
 
 每个适配器实现：
-  synth(req) -> (音频字节, 格式)   req 是网关统一请求（model/input/voice/instructions/speed/seed/lang…）
-  fetch_voices() -> list[dict]     可选：从 Provider 拉音色列表（结果缓存一天）
+  synth(req) -> (音频字节, 格式)       合成：req 是网关统一请求（model/input/voice/instructions/speed/seed/lang…）
+  transcribe(req, 音频路径) -> dict   识别（可选）：req 为 model/language/prompt/words/diarize；返回 text / language / duration / segments / words
+  fetch_voices() -> list[dict]         可选：从 Provider 拉音色列表（结果缓存一天）
+适配器按协议写（一家接口一个类），同一个类可以同时实现合成和识别。
 """
 from __future__ import annotations
 
 import base64
 import http.client as httpclient
 import json
+import mimetypes
+import os
 import threading
 import time
 import urllib.error
@@ -57,6 +61,20 @@ def _err_text(payload: bytes) -> str:
         if isinstance(v, str) and v:
             return v
     return json.dumps(j, ensure_ascii=False)[:300]
+
+
+def multipart(fields: list[tuple[str, str]], files: list[tuple[str, Path]]) -> tuple[bytes, str]:
+    """multipart/form-data 请求体（上传音频用）。同名字段可以重复（如 timestamp_granularities[]）。返回 (字节, Content-Type)。"""
+    b = "vox" + os.urandom(12).hex()
+    out = bytearray()
+    for k, v in fields:
+        out += f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    for k, p in files:
+        ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        out += f'--{b}\r\nContent-Disposition: form-data; name="{k}"; filename="{p.name}"\r\nContent-Type: {ctype}\r\n\r\n'.encode()
+        out += p.read_bytes() + b"\r\n"
+    out += f"--{b}--\r\n".encode()
+    return bytes(out), f"multipart/form-data; boundary={b}"
 
 
 def b64(s: str) -> bytes:
@@ -149,3 +167,7 @@ class CloudEngine:
     # ---- 合成 ----
     def synth(self, req: dict) -> tuple[bytes, str]:
         raise NotImplementedError
+
+    # ---- 识别 ----
+    def transcribe(self, req: dict, audio: Path) -> dict:
+        raise ProviderError(f"{self.m['name']} 的适配器还不支持语音识别")
