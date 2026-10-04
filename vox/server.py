@@ -92,6 +92,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")  # 方便本机其他页面 / 工具调用
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Expose-Headers", "X-Vox-Id, X-Vox-Seed, X-Vox-Duration")
+        if getattr(self, "_static", False):   # 网页文件：每次先问服务端（没变就回 304），升级后不会继续用浏览器缓存里的旧版
+            self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -189,6 +191,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._file(f, audio.FORMATS[m[3]], {"Content-Disposition": f'inline; filename="vox-{m[2]}.{m[3]}"'})
         if p in ("/voices", "/playground", "/transcribe", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
             self.path = "/index.html"
+        self._static = True
         return super().do_GET()
 
     def do_POST(self):
