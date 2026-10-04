@@ -150,7 +150,7 @@ def _call(fn, *args, **kw):
         raise SystemExit(f"✗ {e}")
 
 
-CAP_LABEL = {"tts": {"voices": "音色", "instructions": "指令", "design": "设计", "seed": "种子"},
+CAP_LABEL = {"tts": {"voices": "音色", "clone": "克隆", "instructions": "指令", "design": "设计", "seed": "种子"},
              "stt": {"segments": "分句", "words": "逐词", "diarize": "说话人", "hotwords": "热词", "prompt": "提示"}}
 
 
