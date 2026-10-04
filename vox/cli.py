@@ -203,7 +203,7 @@ def _request(a):
 
 def cmd_say(a):
     text = sys.stdin.read().strip() if a.text == "-" else a.text
-    req = {**_request(a), "input": text, **({"cache": False} if a.no_cache else {})}
+    req = {**_request(a), "input": text, **({"cache": False} if a.no_cache else {}), **({"accept_fee": True} if a.accept_fee else {})}
     t = time.time()
     rec = None if a.local else _server("/api/speech", {**req, "source": "cli"})
     hub = _hub()
@@ -222,13 +222,14 @@ def cmd_say(a):
         subprocess.run(["afplay", rec["file"]])
 
 
-def _server_upload(path, file: Path, fields: dict):
-    """把本地文件以 multipart 上传给运行中的服务（和别的客户端走同一个接口）；没有服务在跑返回 None。"""
+def _server_upload(path, file: Path, fields: dict, more: dict | None = None):
+    """把本地文件以 multipart 上传给运行中的服务（和别的客户端走同一个接口）；没有服务在跑返回 None。more = {字段名: 文件} 是附带的其他文件。"""
     if os.environ.get("VOX_NO_SERVER") or not _server("/api/status"):
         return None
     from .providers.base import multipart
 
-    body, ctype = multipart([(k, "true" if v is True else str(v)) for k, v in fields.items() if v not in (None, False, "", [])], [("file", file)])
+    body, ctype = multipart([(k, "true" if v is True else str(v)) for k, v in fields.items() if v not in (None, False, "", [])],
+                            [("file", file)] + [(k, f) for k, f in (more or {}).items() if f])
     req = urllib.request.Request(SERVER + path, data=body, headers={"Content-Type": ctype}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=3600) as r:
@@ -281,6 +282,48 @@ def cmd_transcripts(a):
     rs = _server(f"/api/transcripts?limit={a.limit}") or stt.records(a.limit)
     _out(a, rs, lambda: [print(f"{r['id']}  {_pad(r['request']['model'], 32)} {r['duration'] or 0:7.1f}s  {_pad(r['file'][:20], 22)}  {r['preview'][:40]}") for r in rs]
          if rs else print("还没有转写记录。vox transcribe <音频文件>"))
+
+
+def cmd_clones(a):
+    hub = _hub()
+    if a.action == "add":
+        if not a.target:
+            raise SystemExit("✗ 用法：vox clones add <录音文件> -n 名字 [--text 文字稿] [--consent 同意声明录音]")
+        f = Path(a.target).expanduser()
+        if not f.is_file():
+            raise SystemExit(f"✗ 找不到文件：{f}")
+        consent = Path(a.consent).expanduser() if a.consent else None
+        fields = {"name": a.name, "text": a.text, "lang": a.lang}
+        r = _server_upload("/api/clones", f, fields, {"consent": consent}) or _call(hub.create_clone, f, a.name or "", text=a.text, lang=a.lang, consent=consent, filename=f.name)
+        return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}  {r['duration']}s\n  文字稿{'（自动识别，可用 vox clones edit 修改）' if r.get('text_auto') else ''}：{r['text'] or '（空：没有本地识别模型，建议用 --text 补上，克隆会更像）'}\n"
+                                         f"  用法：vox say \"你好\" -v clone:{r['id']}"))
+    if a.action == "edit":
+        consent = Path(a.consent).expanduser() if a.consent else None
+        if consent and not consent.is_file():
+            raise SystemExit(f"✗ 找不到文件：{consent}")
+        r = (_server_upload("/api/clones/consent", consent, {"id": a.target}) or _call(hub.update_clone, a.target or "", consent=consent)) if consent else None
+        if a.name or a.text is not None or not consent:
+            r = _server("/api/clones/update", {"id": a.target, "name": a.name, "text": a.text}) or _call(hub.update_clone, a.target or "", a.name, a.text)
+        return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}：{r['text']}"))
+    if a.action == "rm":
+        r = _server("/api/clones/delete", {"id": a.target}) or _call(hub.delete_clone, a.target or "")
+        return _out(a, r, lambda: print(f"✓ 已删除 clone:{r['id']}" + "".join(f"\n  ⚠ 云端没删掉：{x}" for x in r.get("remote_failed", []))))
+    from . import clones
+
+    rs = _server("/api/clones") or clones.records()
+    _out(a, rs, lambda: [print(f"clone:{_pad(r['id'], 16)} {_pad(r['name'], 12)} {r['duration']:5.1f}s  {(r.get('text') or '（无文字稿）')[:36]}"
+                               + (f"  已上传：{'、'.join(r['remote'])}" if r.get("remote") else "")) for r in rs]
+         if rs else print("还没有克隆音色。vox clones add 录音.m4a -n 名字（建议 10–20 秒、一个人、没有背景音乐）"))
+
+
+def cmd_presets(a):
+    hub = _hub()
+    if a.action == "rm":
+        r = _server("/api/presets/delete", {"id": a.id}) or (hub.delete_preset(a.id or ""), {"ok": True})[1]
+        return _out(a, r, lambda: print(f"✓ 已删除 preset:{a.id}"))
+    rs = _server("/api/presets") or hub.presets()
+    _out(a, rs, lambda: [print(f"preset:{_pad(r['id'], 16)} {_pad(r['name'], 12)} {r.get('model')}  {r.get('voice') or '-'}  {r.get('instructions') or ''}") for r in rs]
+         if rs else print("还没有预设。在 WebUI 试音台调好后点「存为预设」"))
 
 
 def cmd_history(a):
@@ -496,18 +539,19 @@ def main(argv=None):
     s.set_defaults(fn=cmd_voices)
 
     s = J(sub.add_parser("sample", help="试听音色样本（统一样本文本）"))
-    s.add_argument("ref", help="音色引用，如 qwen3:serena、kokoro:zf_003、my:<id>")
+    s.add_argument("ref", help="音色引用，如 qwen3:serena、kokoro:zf_003、preset:<id>、clone:<id>")
     s.add_argument("--play", action="store_true")
     s.set_defaults(fn=cmd_sample)
 
     s = J(sub.add_parser("say", help="合成一句话"))
     s.add_argument("text", help="文本；- 表示从标准输入读取")
     s.add_argument("-m", "--model", dest="model", help="模型 ID，默认 local/qwen3（环境变量 VOX_MODEL 可改）")
-    s.add_argument("-v", "--voice", help="音色，如 serena；也可写引用 qwen3:serena / my:<id>")
+    s.add_argument("-v", "--voice", help="音色，如 serena；也可写引用 qwen3:serena / preset:<id> / clone:<id>（克隆音色，不写 -m 时用默认的克隆模型）")
     s.add_argument("-i", "--instructions", dest="instructions", help="情绪 / 语气；声音设计模型里是声音描述")
     s.add_argument("-s", "--speed", type=float, help="语速 0.25–4")
     s.add_argument("--seed", type=int, help="随机种子（Qwen3 可复现）；不填则随机并记录")
     s.add_argument("--no-cache", action="store_true", help="不用缓存，重新合成（不支持种子的云端模型用它再来一条）")
+    s.add_argument("--accept-fee", action="store_true", help="同意收费：第一次在会收费的云端（如 MiniMax）用克隆音色时需要")
     s.add_argument("-l", "--lang", help="语言，如 chinese、english、auto")
     for k, t in (("temperature", float), ("top_p", float), ("top_k", int), ("repetition_penalty", float)):
         s.add_argument("--" + k.replace("_", "-"), dest=k, type=t)
@@ -540,6 +584,19 @@ def main(argv=None):
     s.add_argument("-f", "--format", choices=["txt", "srt", "vtt", "json"], help="show 的输出格式")
     s.add_argument("-n", "--limit", type=int, default=20)
     s.set_defaults(fn=cmd_transcripts)
+
+    s = J(sub.add_parser("clones", help="克隆音色：list / add <录音> / edit <id> / rm <id>"))
+    s.add_argument("action", nargs="?", choices=["list", "add", "edit", "rm"], default="list")
+    s.add_argument("target", nargs="?", help="add 时是录音文件，edit / rm 时是克隆音色 ID")
+    s.add_argument("-n", "--name", help="名字")
+    s.add_argument("--text", help="录音的文字稿；add 时不填就用本地识别模型自动生成")
+    s.add_argument("--lang", help="录音的语种，如 zh、en")
+    s.add_argument("--consent", help="同意声明录音（Gemini 等云端克隆要求本人朗读一段规定的话）")
+    s.set_defaults(fn=cmd_clones)
+    s = J(sub.add_parser("presets", help="我的预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))
+    s.add_argument("action", nargs="?", choices=["list", "rm"], default="list")
+    s.add_argument("id", nargs="?")
+    s.set_defaults(fn=cmd_presets)
 
     J(sub.add_parser("status", help="服务与模型状态")).set_defaults(fn=cmd_status)
 

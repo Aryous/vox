@@ -4,7 +4,8 @@
   clips/            合成结果 wav（按请求哈希命名）
   samples/          音色样本
   history.json      合成历史（CLI / WebUI / API 共享）
-  my_voices.json    自定义音色（模型 + 音色 + 指令 + 种子的组合）
+  presets.json      我的预设（模型 + 音色 + 指令 + 种子的组合；旧版叫「我的音色」，存在 my_voices.json）
+  clones/           克隆音色（参考录音 + 文字稿），见 clones.py
   settings.json     设置（样本文本等）
   models.json       我的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
   models/           下载的本地模型（不进 Time Machine 备份）
@@ -22,11 +23,11 @@ import threading
 import time
 from pathlib import Path
 
-from . import audio, catalog, credentials, discovery, engines, fetch, paths, providers
+from . import audio, catalog, clones, credentials, discovery, engines, fetch, paths, providers
 
 HOME = paths.HOME
 CLIPS, SAMPLES = paths.CLIPS, paths.SAMPLES
-HIST, MYV, SETTINGS = paths.HISTORY, paths.MY_VOICES, paths.SETTINGS
+HIST, PRESETS, SETTINGS = paths.HISTORY, paths.PRESETS, paths.SETTINGS
 MPREFS = catalog.PREFS
 REGISTRY_URL = os.environ.get("VOX_REGISTRY_URL", "https://raw.githubusercontent.com/Aryous/vox/main/vox/registry.json")
 REQ_KEYS = ("model", "input", "voice", "instructions", "speed", "lang", "seed", *catalog.GEN)
@@ -116,6 +117,8 @@ def models(provider: str | None = None, mine: bool | None = None, task: str | No
         st = model_status(m)
         local = m["provider"] == "local"
         d = {k: v for k, v in m.items() if k not in ("voices", "compat")}
+        if m["caps"].get("clone") and not local:
+            d["clone"] = m["compat"].get("clone", {})   # 云端克隆的方式（上传一次 / 每次带上）与费用说明，页面提示用
         d.update(status=st, saved=local and st != "not_downloaded" or m["id"] in saved[m["provider"]],
                  provider_name=catalog.PROVIDERS[m["provider"]]["name"])
         d["mine"] = st in ("ready", "loaded", "downloading") if local else st == "ready" and d["saved"]
@@ -331,7 +334,12 @@ def set_settings(**kw) -> dict:
 
 
 def _sample_key(ref: str, req: dict) -> str:
-    return hashlib.sha1(json.dumps([ref, req], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    return hashlib.sha1(json.dumps([ref, req, _clone_rev(req)], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _clone_rev(req: dict) -> str | None:
+    """请求里用了克隆音色时，返回它的版本（录音 + 文字稿的哈希）：换了录音，缓存跟着失效。"""
+    return clones.from_ref(req["voice"])["rev"] if clones.is_ref(req.get("voice")) else None
 
 
 def voices(model: str | None = None, lang: str | None = None, gender: str | None = None, q: str | None = None, with_samples=True) -> list[dict]:
@@ -357,13 +365,19 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
             vs = providers.engine_for(m).voices()
         for v in vs or []:
             out.append({"ref": f"{sm}:{v['voice']}", "model": m["id"], "voice": v["voice"], "name": v.get("name") or v["voice"], "gender": v.get("gender", ""),
-                        "lang": v.get("lang", ""), "description": v.get("description", ""), "kind": "preset", "cloud": m["provider"] != "local"})
-    for v in my_voices():
+                        "lang": v.get("lang", ""), "description": v.get("description", ""), "kind": "builtin", "cloud": m["provider"] != "local"})
+    for v in presets():
         m = catalog.find_model(v.get("model", ""))
         if model and m is not catalog.find_model(model):
             continue
-        out.append({"ref": f"my:{v['id']}", "model": v.get("model"), "voice": v.get("voice"), "name": v["name"], "gender": v.get("gender", ""), "lang": v.get("lang_label", ""),
-                    "description": v.get("instructions") or "自定义音色", "kind": "custom", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
+        out.append({"ref": f"preset:{v['id']}", "model": v.get("model"), "voice": v.get("voice"), "name": v["name"], "gender": v.get("gender", ""), "lang": v.get("lang_label", ""),
+                    "description": v.get("instructions") or "我的预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
+    # 克隆音色不属于某个模型：指定了支持克隆的模型就挂在它下面，否则挂在默认的克隆模型下面（试听用）
+    cm = target if target and target["caps"].get("clone") else (None if target else clone_model(required=False))
+    for c in clones.records() if cm else []:
+        out.append({"ref": f"clone:{c['id']}", "model": cm["id"], "voice": f"clone:{c['id']}", "name": c["name"], "gender": "", "lang": c.get("lang") or "",
+                    "description": c.get("text") or "克隆音色", "kind": "clone", "cloud": cm["provider"] != "local", "duration": c.get("duration"),
+                    "rev": c["rev"]})
     if lang:
         out = [v for v in out if lang in (v["lang"] or "")]
     if gender:
@@ -382,11 +396,13 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
 
 
 def resolve_voice(ref: str) -> dict:
-    """把音色引用（qwen3:serena / my:xxx）展开成请求参数。"""
-    if ref.startswith("my:"):
-        v = next((x for x in my_voices() if x["id"] == ref[3:]), None)
+    """把音色引用展开成请求参数：qwen3:serena（预置音色）、preset:xxx（我的预设，旧写法 my:xxx）。
+    克隆音色 clone:xxx 不展开，原样留在 voice 里，合成时再换成各家需要的形式（见 _render）。"""
+    if ref.startswith(("preset:", "my:")):
+        pid = ref.split(":", 1)[1]
+        v = next((x for x in presets() if x["id"] == pid), None)
         if not v:
-            raise VoxError(f"没有自定义音色 {ref}")
+            raise VoxError(f"没有预设 {ref}（vox presets 查看已有的）")
         return {k: v[k] for k in REQ_KEYS if k in v and k != "input"}
     # 音色 ID 本身可能含冒号（如硅基流动），所以从左往右找第一个能匹配上模型的前缀
     for i, ch in enumerate(ref):
@@ -411,23 +427,101 @@ def sample(ref: str) -> dict:
     return {"ref": ref, "url": f"/samples/{f.name}", "file": str(f), "dur": round(audio.duration(f), 2), "text": req["input"]}
 
 
-def my_voices() -> list[dict]:
-    return _load(MYV, [])
+def presets() -> list[dict]:
+    """我的预设。旧版叫「我的音色」（my_voices.json），第一次读取时原样搬到 presets.json。"""
+    if not PRESETS.exists() and paths.MY_VOICES.exists():
+        with FILE_LOCK:
+            if not PRESETS.exists():
+                paths.MY_VOICES.replace(PRESETS)
+    return _load(PRESETS, [])
 
 
-def save_my_voice(name: str, request: dict, vid: str | None = None) -> dict:
+def save_preset(name: str, request: dict, vid: str | None = None) -> dict:
     req = normalize({**request, "input": "-"}, strict=False)
     req.pop("input", None)
     vid = vid or re.sub(r"[^\w一-鿿-]+", "-", name).strip("-").lower() or f"v{int(time.time())}"
     rec = {"id": vid, "name": name, **req}
     with FILE_LOCK:
-        _save(MYV, [rec] + [v for v in my_voices() if v["id"] != vid])
+        _save(PRESETS, [rec] + [v for v in presets() if v["id"] != vid])
     return rec
 
 
-def delete_my_voice(vid: str):
+def delete_preset(vid: str):
     with FILE_LOCK:
-        _save(MYV, [v for v in my_voices() if v["id"] != vid])
+        _save(PRESETS, [v for v in presets() if v["id"] != vid])
+
+
+# ---------- 克隆音色 ----------
+def clone_model(required=True) -> dict | None:
+    """默认的克隆模型：设置里的 clone_model，否则「我的模型」里第一个能用的、支持克隆的模型（本地优先，不花钱）。"""
+    pick = catalog.find_model(settings().get("clone_model") or "")
+    if pick and pick["caps"].get("clone") and usable(pick):
+        return pick
+    mine = [m for m in clones.models_for() if is_mine(m) and usable(m)]
+    m = next((m for m in mine if m["provider"] == "local"), None) or (mine[0] if mine else None)
+    if m or not required:
+        return m
+    local = next((m for m in clones.models_for() if m["provider"] == "local"), None)
+    hint = f"下载一个本地克隆模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "先添加一个支持克隆的模型"
+    raise VoxError(f"还没有能用的克隆模型。{hint}；或连接支持克隆的云端 Provider，见 vox models --all 里标着「克隆」的")
+
+
+def _clone_models_text() -> str:
+    return "、".join(catalog.short(m) for m in clones.models_for()) or "（暂无）"
+
+
+def create_clone(src: Path, name: str, **kw) -> dict:
+    try:
+        return clones.create(src, name, **kw)
+    except clones.CloneError as e:
+        raise VoxError(str(e)) from None
+
+
+def update_clone(cid: str, name: str | None = None, text: str | None = None, consent: Path | None = None) -> dict:
+    try:
+        return clones.update(cid, name, text, consent)
+    except clones.CloneError as e:
+        raise VoxError(str(e)) from None
+
+
+def delete_clone(cid: str) -> dict:
+    def cleanup(key, r):
+        m = catalog.find_model(r.get("model", "")) or catalog.find_model(key)
+        if m and m["provider"] != "local":
+            providers.engine_for(m).clone_delete(r)
+    try:
+        return clones.delete(cid, cleanup)
+    except clones.CloneError as e:
+        raise VoxError(str(e)) from None
+
+
+def _clone_for(m: dict, req: dict, accept_fee: bool = False) -> dict:
+    """合成前把 clone:<id> 换成这个模型需要的形式：本地给录音路径和文字稿；云端按需注册后给音色 ID，或每次带上录音。
+    第一次在某家云端用：先查录音长度和同意声明是否满足这家的要求；要收费的（compat.clone.fee）必须 accept_fee=True 才上传。"""
+    try:
+        c = clones.from_ref(req["voice"])
+    except clones.CloneError as e:
+        raise VoxError(str(e)) from None
+    ref = {"id": c["id"], "audio": str(clones.sample_path(c)), "text": c.get("text") or "", "lang": c.get("lang"), "duration": c.get("duration"),
+           "consent": str(clones.consent_path(c) or "") or None, "name": c["name"]}
+    cc = m["compat"].get("clone", {}) if m["provider"] != "local" else {}
+    if m["provider"] == "local" or cc.get("mode") == "inline":
+        return {"clone": ref}
+    r = clones.remote(c, m)
+    if not r:
+        pname = catalog.PROVIDERS[m["provider"]]["name"]
+        if cc.get("min_sec") and (c.get("duration") or 0) < cc["min_sec"]:
+            raise VoxError(f"{pname} 要求参考录音至少 {cc['min_sec']} 秒，这段只有 {c.get('duration')} 秒：换一段更长的录音重新克隆")
+        if cc.get("fee") and not accept_fee:
+            raise VoxError(f"第一次在 {pname} 使用「{c['name']}」要先把录音上传过去，这家收费：{cc['fee']}。"
+                           f"确认后重试：CLI 加 --accept-fee，HTTP 请求加 \"accept_fee\": true")
+        e = providers.engine_for(m)
+        try:
+            info = e.clone_create(ref)
+        except providers.ProviderError as err:
+            raise VoxError(f"{catalog.PROVIDERS[m['provider']]['name']}：注册克隆音色失败：{err}") from None
+        r = clones.save_remote(c, m, info)["remote"][clones.remote_key(m)]
+    return {"voice": r["voice"]}
 
 
 # ---------- 合成 ----------
@@ -437,7 +531,10 @@ def normalize(req: dict, strict=True) -> dict:
     if isinstance(req.get("voice"), dict):  # OpenAI 自定义音色对象 {"id": ...}
         req["voice"] = req["voice"].get("id")
     v = req.get("voice")
-    if isinstance(v, str) and (":" in v):   # 允许 voice 直接写音色引用
+    if clones.is_ref(v):   # 克隆音色：不指定模型时用默认的克隆模型
+        if not req.get("model"):
+            req["model"] = clone_model()["id"]
+    elif isinstance(v, str) and (":" in v):   # 允许 voice 直接写音色引用
         req = {**resolve_voice(v), **{k: x for k, x in req.items() if k != "voice"}}
     m = model_or_raise(req.get("model") or os.environ.get("VOX_MODEL", "local/qwen3"))
     if m["task"] != "tts":
@@ -454,28 +551,40 @@ def normalize(req: dict, strict=True) -> dict:
             raise VoxError("speed 取值 0.25–4")
     if "seed" in out:
         out["seed"] = int(out["seed"])
-    if m["caps"].get("voices") and not out.get("voice"):
+    if clones.is_ref(out.get("voice")):
+        if not m["caps"].get("clone"):
+            raise VoxError(f"{m['id']} 不支持克隆音色。支持克隆的模型：{_clone_models_text()}")
+        try:
+            clones.from_ref(out["voice"])
+        except clones.CloneError as e:
+            raise VoxError(str(e)) from None
+    elif m["caps"].get("clone") and not m["caps"].get("voices"):
+        if strict:
+            names = "、".join(f"clone:{c['id']}" for c in clones.records()[:5]) or "还没有，先用 vox clone add 录音.m4a 新建"
+            raise VoxError(f"{m['id']} 只能用克隆音色：-v clone:<id>（{names}）")
+    elif m["caps"].get("voices") and not out.get("voice"):
         out["voice"] = m.get("default_voice")
     if m["caps"].get("design") and strict and not out.get("instructions"):
         raise VoxError(f"{m['id']} 需要 instructions 描述声音，例如「{catalog.DESIGN_EXAMPLES[1]}」")
     return out
 
 
-def _render(req: dict, out: Path) -> float:
+def _render(req: dict, out: Path, accept_fee: bool = False) -> float:
     """合成并写成 wav，返回时长。本地模型返回采样数组，云端返回编码后的字节，最后都落成同一种文件。"""
     m = catalog.find_model(req["model"])
     e = _engine(m)
     speed = float(req.get("speed", 1))
+    cl = _clone_for(m, req, accept_fee) if clones.is_ref(req.get("voice")) else {}
     if m["provider"] != "local":
         try:
-            data, fmt = e.synth(req)  # 云端请求可以并发，不占本地锁
+            data, fmt = e.synth({**req, **cl} if "voice" in cl else {**req, **({"_clone": cl["clone"]} if cl else {})})  # 云端请求可以并发，不占本地锁
         except providers.ProviderError as err:
             raise VoxError(f"{catalog.PROVIDERS[m['provider']]['name']}：{err}") from None
         return audio.bytes_to_wav(data, fmt, out, speed, e.native_speed)
     gen = {k: req[k] for k in catalog.GEN if k in req}
     with SYNTH_LOCK:
-        wav, sr = e.synth(req["input"], voice=req.get("voice"), instruct=req.get("instructions"), speed=speed,
-                          lang=req.get("lang", "chinese"), seed=req.get("seed"), **gen)
+        wav, sr = e.synth(req["input"], voice=None if cl else req.get("voice"), instruct=req.get("instructions"), speed=speed,
+                          lang=req.get("lang", "chinese"), seed=req.get("seed"), **gen, **cl)
     return audio.write_wav(wav, sr, out, speed, e.native_speed)
 
 
@@ -512,6 +621,8 @@ def speak(request: dict, source="cli", record=True) -> dict:
     if m["caps"].get("seed") and "seed" not in req:
         req["seed"] = int.from_bytes(os.urandom(3), "big") % 1000000  # 记录实际种子，保证可复现
     key = json.dumps(req, ensure_ascii=False, sort_keys=True)
+    if clones.is_ref(req.get("voice")):
+        key += _clone_rev(req)   # 克隆音色换了录音：同样的请求要重新合成
     if fresh and not m["caps"].get("seed"):
         key += os.urandom(8).hex()
     cid = hashlib.sha1(key.encode()).hexdigest()[:16]
@@ -520,7 +631,7 @@ def speak(request: dict, source="cli", record=True) -> dict:
     if hit and out.exists() and not fresh:
         return {**hit, "cached": True, "file": str(out)}
     t = time.time()
-    dur = _render(req, out)
+    dur = _render(req, out, accept_fee=request.get("accept_fee") is True)
     elapsed = time.time() - t
     rec = {"id": cid, "ts": time.time(), "source": source, "request": req, "dur": round(dur, 3), "elapsed": round(elapsed, 2), "asr": None, "star": False}
     if m["provider"] != "local":

@@ -10,12 +10,15 @@ B 组 multimodal-generation（qwen3-tts-flash、qwen3-tts-instruct-flash）
 
 非流式两组都返回 output.audio.url（OSS 临时链接，24 小时），再下载一次。
 文档 https://help.aliyun.com/zh/model-studio/cosyvoice-tts-http-api 、https://help.aliyun.com/zh/model-studio/qwen-tts-api
+声音复刻用 Qwen3-TTS-VC（B 组模型 qwen3-tts-vc-*）：POST …/audio/tts/customization，model=qwen-voice-enrollment，
+  录音以 data URI 内联（单声道、≥24 kHz、≤60 秒），返回的 voice 只能给创建时的 target_model 用（按模型记）。0.01 元/个。
+  CosyVoice / Qwen-Audio 的复刻只收公网 URL，vox 不做。文档 https://help.aliyun.com/zh/model-studio/voice-clone-design-http-api
 """
 from __future__ import annotations
 
 import json
 
-from .base import CloudEngine, ProviderError, clamp, http
+from .base import CloudEngine, ProviderError, clamp, clone_file, data_uri, http, remote_id
 
 LANG = {"chinese": "Chinese", "english": "English", "japanese": "Japanese", "korean": "Korean", "german": "German", "french": "French",
         "russian": "Russian", "portuguese": "Portuguese", "spanish": "Spanish", "italian": "Italian", "auto": "Auto"}
@@ -66,3 +69,27 @@ class DashScope(CloudEngine):
         _, _, audio = http("GET", audio_url, timeout=120)
         ext = audio_url.split("?")[0].rsplit(".", 1)[-1].lower()
         return audio, ext if ext in ("mp3", "wav", "opus", "pcm") else "mp3"
+
+    # ---- 声音复刻（Qwen3-TTS-VC） ----
+    ENROLL = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization"
+
+    def _enroll(self, inp: dict) -> dict:
+        _, _, raw = http("POST", self.ENROLL, self._h(), {"model": "qwen-voice-enrollment", "input": inp}, timeout=180)
+        j = json.loads(raw)
+        if j.get("code"):
+            raise ProviderError(f"{j.get('code')}：{j.get('message')}")
+        return j.get("output") or {}
+
+    def clone_create(self, ref):
+        f, cut = clone_file(ref, max_sec=60)
+        inp = {"action": "create", "target_model": self.m["remote"], "preferred_name": remote_id(ref, "vox", 16, "_"),
+               "audio": {"data": data_uri(f)}, "language": (ref.get("lang") or "zh")[:2]}
+        if ref.get("text") and not cut:
+            inp["text"] = ref["text"]
+        out = self._enroll(inp)
+        if not out.get("voice"):
+            raise ProviderError(f"百炼没有返回音色：{json.dumps(out, ensure_ascii=False)[:300]}")
+        return {"voice": out["voice"], **({"fallback": out.get("fallback_reason") or True} if out.get("fallback_mode") else {})}
+
+    def clone_delete(self, remote):
+        self._enroll({"action": "delete", "voice": remote["voice"]})

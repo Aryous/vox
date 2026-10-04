@@ -3,13 +3,16 @@
 情绪只有枚举（voice_setting.emotion）：把 instructions 里的描述映射到枚举，映射不上就明确报错，不假装支持。
 2.8 不支持 whisper；fluent 在 2.8 上文档矛盾，不开放。文本里可直接写 (laughs)(sighs) 等语气词和 <#0.5#> 停顿。
 文档 https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
+快速复刻：先 POST /v1/files/upload（purpose=voice_clone，10 秒–5 分钟），再 POST /v1/voice_clone（voice_id 由调用方起名）。
+  9.9 元/音色，首次用它合成时扣费；复刻后 7 天内没正式用过会被删除。账号要先完成实名认证（否则返回 2038）。
+  删除 POST /v1/delete_voice。文档 https://platform.minimaxi.com/docs/guides/speech-voice-clone
 """
 from __future__ import annotations
 
 import json
 
 from .. import credentials
-from .base import CloudEngine, ProviderError, clamp, http
+from .base import CloudEngine, ProviderError, clamp, clone_file, http, multipart, remote_id
 
 EMOTIONS = {
     "happy": ("开心", "高兴", "快乐", "愉快", "喜悦", "兴奋", "笑", "happy", "cheerful", "joy"),
@@ -74,3 +77,23 @@ class MiniMax(CloudEngine):
         if not hexaudio:
             raise ProviderError("MiniMax 没有返回音频")
         return bytes.fromhex(hexaudio), "mp3"
+
+    # ---- 快速复刻 ----
+    def clone_create(self, ref):
+        f, _ = clone_file(ref)
+        body, ctype = multipart([("purpose", "voice_clone")], [("file", f)])
+        _, _, raw = http("POST", f"{self.base}/v1/files/upload", {**self._h(), "Content-Type": ctype}, body, timeout=180)
+        j = json.loads(raw)
+        self._check(j)
+        fid = (j.get("file") or {}).get("file_id")
+        if not fid:
+            raise ProviderError(f"MiniMax 上传录音没有返回 file_id：{json.dumps(j, ensure_ascii=False)[:300]}")
+        vid = remote_id(ref, "vox", 40)
+        _, _, raw = http("POST", f"{self.base}/v1/voice_clone", self._h(), {"file_id": fid, "voice_id": vid, "need_noise_reduction": False}, timeout=180)
+        j = json.loads(raw)
+        self._check(j)
+        return {"voice": vid}
+
+    def clone_delete(self, remote):
+        _, _, raw = http("POST", f"{self.base}/v1/delete_voice", self._h(), {"voice_type": "voice_cloning", "voice_id": remote["voice"]}, timeout=30)
+        self._check(json.loads(raw))

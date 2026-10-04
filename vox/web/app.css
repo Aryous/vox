@@ -490,3 +490,23 @@ details.adv[open]{display:flex;flex-direction:column;gap:12px}
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .tx-seg .spk{color:hsl(var(--h) 70% 74%)}}
 :root[data-theme="dark"] .tx-seg .spk{color:hsl(var(--h) 70% 74%)}
+
+/* ---------- 克隆音色 ---------- */
+.head-a{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.clone-new{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:18px 20px;margin-bottom:20px;display:flex;flex-direction:column;gap:14px}
+.cn-h b{display:block;font-size:15px;font-weight:620;margin-bottom:2px}
+.cn-h span{font-size:13px;color:var(--text-2)}
+.cn-src{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+.cn-src .drop{flex:1;min-width:240px;margin:0}
+.cn-src > .btn{align-self:center}
+.cn-audio{width:100%;height:36px}
+.cn-grid{display:grid;grid-template-columns:minmax(160px,1fr) 2.4fr;gap:12px}
+@media (max-width:720px){.cn-grid{grid-template-columns:1fr}}
+.cn-ok{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--text)}
+.cn-a{display:flex;align-items:center;gap:12px}
+.cn-edit{display:flex;flex-direction:column;gap:6px}
+.cn-edit .note{font-size:12px}
+.vc-text{font-size:13px;color:var(--text-2)}
+.tag.mt{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--text)}
+q.consent{display:block;font-size:13px;color:var(--text);background:var(--sunk);border-radius:6px;padding:6px 10px;quotes:"「" "」"}
+.cn-cs{display:flex;flex-direction:column;gap:4px}

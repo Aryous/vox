@@ -1,6 +1,7 @@
 """本地引擎。按模型实例化（get(模型字典)），同一类引擎可以跑不同的仓库（尺寸、量化）；新增引擎写一个类，登记到 ENGINES。
 
 合成（tts）引擎实现 synth(text, voice, instruct, speed, lang, seed, **采样参数) -> (float32 音频, 采样率)，以及 voices() / languages()。
+克隆引擎（MlxClone）的 synth 多一个 clone 参数（参考录音路径和文字稿）。
 识别（stt）引擎实现 transcribe(wav 路径, language, prompt, hotwords, duration) -> dict（text / language / segments），见 MlxSTT。
 引擎的 spec 是它对应的模型条目（注册表字段），引擎按其中的模型专属配置调用（如 prompt_format、tokens_per_sec）。
 所有引擎都有 is_ready()（文件是否在本地）、is_loaded()（是否在内存里）、local_path()。
@@ -265,7 +266,37 @@ class MlxSTT(_MlxRepo):
                 **({"words": [{"start": float(w["start"]), "end": float(w["end"]), "word": w.get("word", "")} for w in x["words"]]} if x.get("words") else {})}
 
 
-ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro, MlxSTT)}
+class MlxClone(_Qwen3):
+    """mlx-audio 的零样本克隆：同一个接口跑 Qwen3-TTS Base、VoxCPM2、OmniVoice……（按仓库里的 config 自动选实现）。
+    每次合成带上参考录音（clone["audio"]）和它的文字稿（clone["text"]，有的模型没有文字稿也能克隆，只是像得少一些）。"""
+    name = "mlx-clone"
+    model = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+    params = ("voice", "speed", "seed")
+
+    def voices(self):
+        return []
+
+    def languages(self):
+        return []
+
+    def synth(self, text, voice=None, instruct=None, speed=1.0, lang="chinese", seed=None, clone=None, **gen):
+        import inspect
+
+        if not clone:
+            raise ValueError(f"{self.model} 只能用克隆音色（-v clone:<id>）")
+        m = self._load()
+        self._seed(seed)
+        accepts = inspect.signature(m.generate).parameters
+        kw = {"ref_audio": clone["audio"], **{k: v for k, v in self._gen(gen).items() if k in accepts}}
+        if clone.get("text") and "ref_text" in accepts:
+            kw["ref_text"] = clone["text"]
+        with contextlib.redirect_stdout(sys.stderr):
+            r = m.generate(text=text, **kw)
+            wav = self._collect(r if not hasattr(r, "audio") else [r])
+        return wav, m.sample_rate
+
+
+ENGINES = {e.name: e for e in (Qwen3, Qwen3Design, Kokoro, MlxSTT, MlxClone)}
 _live: dict[str, Engine] = {}   # 模型 ID → 引擎实例
 
 
