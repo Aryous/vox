@@ -24,8 +24,7 @@ from .base import CloudEngine, ProviderError, b64, clone_file, http
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 PAGES = 20   # 音色库翻页上限：每页 1000，最多 2 万个
-CONSENT = {"zh": "我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型",
-           "en": "I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model."}
+
 
 
 class Gemini(CloudEngine):
@@ -79,7 +78,8 @@ class Gemini(CloudEngine):
     # ---- 声音复刻 ----
     def clone_create(self, ref):
         if not ref.get("consent"):
-            raise ProviderError(f"Gemini 要求声音的主人本人朗读一句同意声明并上传：「{CONSENT['zh']}」（英文：{CONSENT['en']}）。"
+            phrase = self.m["compat"]["clone"]["consent"]   # 规定的原话在注册表里（compat.clone.consent），页面也从那里取
+            raise ProviderError(f"Gemini 要求声音的主人本人朗读一句同意声明并上传：「{phrase['zh']}」（英文：{phrase['en']}）。"
                                 f"录好后运行 vox clones edit {ref['id']} --consent 录音.m4a，或在网页音色库里编辑这个克隆音色")
         src, _ = clone_file(ref)
         consent, _ = clone_file(ref, key="consent")

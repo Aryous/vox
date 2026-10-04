@@ -168,7 +168,7 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 | `vox load / unload <模型>` | 预加载进运行中的服务 / 从内存卸载 |
 | `vox voices` · `vox sample <引用> --play` | 浏览音色 · 试听音色样本 |
 | `vox say <文本>` | 合成（`-` 从标准输入读；`-o 文件.mp3`；`--play`；`--accept-fee` 同意云端克隆的费用） |
-| `vox clones [add\|edit\|rm]` | 克隆音色：新建（`-n` 名字、`--text` 文字稿、`--consent` 同意声明录音）· 改名或改文字稿 · 删除（顺带删云端注册的） |
+| `vox clones [add\|edit\|rm]` | 克隆音色：新建（`-n` 名字、`-m` 首选模型、`--text` 文字稿、`--consent` 同意声明录音）· 改名或改文字稿 · 删除（顺带删云端注册的） |
 | `vox presets [rm]` | 我的预设（音色 + 语气 + 语速 + 种子的组合，在网页试音台保存） |
 | `vox batch script.json` | 多角色脚本批量合成，只重做改动过的句子 |
 | `vox transcribe <文件…>` | 语音识别（`-m`、`-l zh`、`--hotwords`、`--diarize`、`--words`、`-f txt\|srt\|vtt\|json`、`-o`） |

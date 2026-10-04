@@ -63,8 +63,8 @@ POST /api/speech {{同 /v1/audio/speech}}   返回 JSON：id、request（含实�
 GET  /api/history?limit=&star=   POST /api/history/update {{"id","star"|"delete"}}   POST /api/asr {{"id"}}
 GET/POST /api/presets            我的预设（音色 + 语气 + 语速 + 种子）；POST /api/presets/delete {{"id"}}
 GET  /api/clones                 克隆音色；GET /clones/<id>/sample.wav 原始录音
-POST /api/clones                 multipart：file（参考录音，10–20 秒、一个人）+ name / text（文字稿，留空自动识别）/ lang / consent（同意声明录音，Gemini 需要）
-POST /api/clones/update {{"id","name"?,"text"?}}；POST /api/clones/consent（multipart：id + consent）；POST /api/clones/delete {{"id"}}（顺带删除云端注册的音色）
+POST /api/clones                 multipart：file（参考录音，10–20 秒、一个人）+ name / model（首选模型）/ text（文字稿，留空自动识别）/ lang / consent（同意声明录音，部分云端需要）
+POST /api/clones/update {{"id","name"?,"text"?,"model"?}}；POST /api/clones/consent（multipart：id + consent）；POST /api/clones/delete {{"id"}}（顺带删除云端注册的音色）
 GET  /api/status                 服务状态、已加载模型、内存
 GET  /api/providers              Provider 与连接状态；POST /api/keys {{"env","value"}} 保存凭证（不会回显）
 GET  /api/registry | POST /api/registry/update   模型注册表版本 / 拉取新版
@@ -218,7 +218,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/asr": lambda b: {"id": b.get("id"), "text": hub.asr(b.get("id", ""))},
             "/api/presets": lambda b: hub.save_preset(b.get("name", "").strip() or "未命名预设", b.get("request", {}), b.get("id")),
             "/api/presets/delete": lambda b: (hub.delete_preset(b.get("id", "")), {"ok": True})[1],
-            "/api/clones/update": lambda b: hub.update_clone(b.get("id", ""), b.get("name"), b.get("text")),
+            "/api/clones/update": lambda b: hub.update_clone(b.get("id", ""), b.get("name"), b.get("text"), model=b.get("model") or None),
             "/api/clones/delete": lambda b: hub.delete_clone(b.get("id", "")),
             "/api/settings": lambda b: hub.set_settings(sample_text=b.get("sample_text"), favorites=b.get("favorites")),
             "/api/keys": lambda b: hub.set_key(b.get("env", ""), b.get("value", "")),
@@ -287,7 +287,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return f
             src, consent = keep("file"), keep("consent")
             return hub.create_clone(src, form.get("name") or "", text=form.get("text"), lang=form.get("lang") or None, consent=consent,
-                                    filename=Path(files["file"][0] or "upload").name, cid=form.get("id") or None)
+                                    filename=Path(files["file"][0] or "upload").name, cid=form.get("id") or None, model=form.get("model") or None)
 
     def _clone_consent(self):
         form, files = self._form()

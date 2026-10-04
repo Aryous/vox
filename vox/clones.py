@@ -9,6 +9,7 @@
   sample.wav    规范化后的参考录音（24 kHz 单声道，去掉首尾静音，最长 MAX_SEC 秒）
   consent.wav   同意声明录音（可选；Gemini 等要求本人朗读一段规定的话）
   clone.json    id / name / text（文字稿）/ text_auto（文字稿是否自动识别）/ lang / file（原文件名）/ duration
+                / model（首选模型：试听和不指定模型时用它；任何支持克隆的模型都能用这个音色）
                 / rev / created / remote（在各家云端注册后的音色 ID）
 任何支持克隆（caps.clone）的模型都能用它：
   本地模型    每次合成都带上参考录音（零样本，不需要训练）
@@ -114,7 +115,7 @@ def _transcribe(wav: Path, lang: str | None) -> str:
 
 
 def create(src: Path, name: str, text: str | None = None, lang: str | None = None, consent: Path | None = None,
-           filename: str | None = None, cid: str | None = None) -> dict:
+           filename: str | None = None, cid: str | None = None, model: str | None = None) -> dict:
     """从一段录音新建（或用同一个 id 覆盖）克隆音色。text 不给时用本地识别模型自动生成。"""
     src = Path(src)
     if not src.is_file():
@@ -139,14 +140,14 @@ def create(src: Path, name: str, text: str | None = None, lang: str | None = Non
     except CloneError:
         pass
     rec = {"id": cid, "name": name, "text": text, "text_auto": auto and bool(text), "lang": lang or old.get("lang"),
-           "consent": bool(consent) or (d / "consent.wav").exists(),
+           "consent": bool(consent) or (d / "consent.wav").exists(), "model": model or old.get("model"),
            "file": filename or src.name, "duration": round(dur, 2), "rev": _rev(wav, text),
            "created": old.get("created", time.time()), "updated": time.time(), "remote": old.get("remote", {})}
     _write(rec)
     return rec
 
 
-def update(cid: str, name: str | None = None, text: str | None = None, consent: Path | None = None) -> dict:
+def update(cid: str, name: str | None = None, text: str | None = None, consent: Path | None = None, model: str | None = None) -> dict:
     """改名、改文字稿、补交同意声明录音。同意声明不影响 rev：它只是给要求它的云端看的，不改变声音本身。"""
     rec = get(cid)
     if consent:
@@ -154,6 +155,8 @@ def update(cid: str, name: str | None = None, text: str | None = None, consent: 
         rec["consent"] = True
     if name is not None and name.strip():
         rec["name"] = name.strip()
+    if model:
+        rec["model"] = model
     if text is not None:
         rec["text"], rec["text_auto"] = text.strip(), False
         rec["rev"] = _rev(sample_path(rec), rec["text"])   # 文字稿变了：云端注册失效，下次用时重新上传

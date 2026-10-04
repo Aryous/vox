@@ -772,6 +772,18 @@ class CloneTest(unittest.TestCase):
         hub.delete_clone("我的声音")
         self.assertFalse(any(x["id"] == "我的声音" for x in self.clones.records()))
 
+    def test_preferred_model(self):
+        c = hub.create_clone(self.src, "首选", text="这是一段测试录音。", model="gemini/gemini-3.8-flash-tts")
+        self.assertEqual(c["model"], "gemini/gemini-3.8-flash-tts")
+        self.assertEqual(hub.normalize({"voice": "clone:首选", "input": "x"})["model"], "gemini/gemini-3.8-flash-tts")   # 不写模型：用首选模型
+        self.assertEqual(next(v for v in hub.voices(with_samples=False) if v["ref"] == "clone:首选")["model"], "gemini/gemini-3.8-flash-tts")
+        self.assertEqual(hub.normalize({"model": "elevenlabs/eleven_v3", "voice": "clone:首选", "input": "x"})["model"], "elevenlabs/eleven_v3")   # 换别的克隆模型照样能用
+        with self.assertRaises(hub.VoxError):
+            hub.update_clone("首选", model="local/kokoro")                         # 不支持克隆的模型不能设为首选
+        self.assertEqual(hub.update_clone("首选", model="elevenlabs/eleven_v3")["model"], "elevenlabs/eleven_v3")
+        self.assertEqual(catalog.find_model("gemini/gemini-3.8-flash-tts")["compat"]["clone"]["consent"]["zh"], "我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型")
+        hub.delete_clone("首选")
+
     def test_presets_migrate(self):
         from vox import paths
         hub.PRESETS.unlink(missing_ok=True)

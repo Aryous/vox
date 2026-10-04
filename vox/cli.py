@@ -288,13 +288,14 @@ def cmd_clones(a):
     hub = _hub()
     if a.action == "add":
         if not a.target:
-            raise SystemExit("✗ 用法：vox clones add <录音文件> -n 名字 [--text 文字稿] [--consent 同意声明录音]")
+            raise SystemExit("✗ 用法：vox clones add <录音文件> -n 名字 [-m 首选模型] [--text 文字稿] [--consent 同意声明录音]")
         f = Path(a.target).expanduser()
         if not f.is_file():
             raise SystemExit(f"✗ 找不到文件：{f}")
         consent = Path(a.consent).expanduser() if a.consent else None
-        fields = {"name": a.name, "text": a.text, "lang": a.lang}
-        r = _server_upload("/api/clones", f, fields, {"consent": consent}) or _call(hub.create_clone, f, a.name or "", text=a.text, lang=a.lang, consent=consent, filename=f.name)
+        fields = {"name": a.name, "text": a.text, "lang": a.lang, "model": a.model}
+        r = _server_upload("/api/clones", f, fields, {"consent": consent}) or _call(hub.create_clone, f, a.name or "", text=a.text, lang=a.lang, consent=consent,
+                                                                                   filename=f.name, model=a.model)
         return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}  {r['duration']}s\n  文字稿{'（自动识别，可用 vox clones edit 修改）' if r.get('text_auto') else ''}：{r['text'] or '（空：没有本地识别模型，建议用 --text 补上，克隆会更像）'}\n"
                                          f"  用法：vox say \"你好\" -v clone:{r['id']}"))
     if a.action == "edit":
@@ -302,8 +303,8 @@ def cmd_clones(a):
         if consent and not consent.is_file():
             raise SystemExit(f"✗ 找不到文件：{consent}")
         r = (_server_upload("/api/clones/consent", consent, {"id": a.target}) or _call(hub.update_clone, a.target or "", consent=consent)) if consent else None
-        if a.name or a.text is not None or not consent:
-            r = _server("/api/clones/update", {"id": a.target, "name": a.name, "text": a.text}) or _call(hub.update_clone, a.target or "", a.name, a.text)
+        if a.name or a.text is not None or a.model or not consent:
+            r = _server("/api/clones/update", {"id": a.target, "name": a.name, "text": a.text, "model": a.model}) or _call(hub.update_clone, a.target or "", a.name, a.text, model=a.model)
         return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}：{r['text']}"))
     if a.action == "rm":
         r = _server("/api/clones/delete", {"id": a.target}) or _call(hub.delete_clone, a.target or "")
@@ -591,6 +592,7 @@ def main(argv=None):
     s.add_argument("-n", "--name", help="名字")
     s.add_argument("--text", help="录音的文字稿；add 时不填就用本地识别模型自动生成")
     s.add_argument("--lang", help="录音的语种，如 zh、en")
+    s.add_argument("-m", "--model", help="首选模型（试听和不写 -m 时用它），如 qwen3-clone、gemini/gemini-3.8-flash-tts；不填用默认的克隆模型")
     s.add_argument("--consent", help="同意声明录音（Gemini 等云端克隆要求本人朗读一段规定的话）")
     s.set_defaults(fn=cmd_clones)
     s = J(sub.add_parser("presets", help="我的预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))

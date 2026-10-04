@@ -510,3 +510,4 @@ details.adv[open]{display:flex;flex-direction:column;gap:12px}
 .tag.mt{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--text)}
 q.consent{display:block;font-size:13px;color:var(--text);background:var(--sunk);border-radius:6px;padding:6px 10px;quotes:"「" "」"}
 .cn-cs{display:flex;flex-direction:column;gap:4px}
+.cn-consent{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line);padding-top:12px}

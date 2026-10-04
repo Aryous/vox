@@ -168,7 +168,7 @@ vox calls `POST {base}/audio/speech`, reads models from `GET {base}/models` and 
 | `vox load / unload <model>` | preload into / free from the running server |
 | `vox voices` · `vox sample <ref> --play` | browse voices · hear a voice's sample |
 | `vox say <text>` | synthesize (`-` reads stdin; `-o file.mp3`; `--play`; `--accept-fee` to OK a cloud provider's cloning fee) |
-| `vox clones [add\|edit\|rm]` | cloned voices: create (`-n` name, `--text` transcript, `--consent` consent recording) · rename or fix the transcript · delete (also removes it from the cloud) |
+| `vox clones [add\|edit\|rm]` | cloned voices: create (`-n` name, `-m` preferred model, `--text` transcript, `--consent` consent recording) · rename or fix the transcript · delete (also removes it from the cloud) |
 | `vox presets [rm]` | presets (voice + tone + speed + seed, saved from the web playground) |
 | `vox batch script.json` | multi-voice script → audio files, redoing only lines that changed |
 | `vox transcribe <files>` | speech-to-text (`-m`, `-l zh`, `--hotwords`, `--diarize`, `--words`, `-f txt\|srt\|vtt\|json`, `-o`) |

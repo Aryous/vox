@@ -8,7 +8,6 @@ const ORIGIN = location.origin;
 const GEN_DEFAULT = { temperature: 0.9, top_p: 1, top_k: 50, repetition_penalty: 1.05 };
 const LANGS = ['chinese', 'english', 'japanese', 'korean', 'german', 'french', 'russian', 'portuguese', 'spanish', 'italian', 'auto'];
 const STATUS = { loaded: '已加载', ready: '可用', not_downloaded: '未下载', downloading: '下载中', needs_key: '未连接' };
-const CONSENT = '我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型';   // Gemini 声音复刻要求本人逐字朗读的同意声明（中文版）
 const QUICK = ['你好呀，今天过得怎么样？', '我……没问一声，就把 Docker 镜像删了。', '老规矩：先查清，再说明，等你拍板。', 'The quick brown fox jumps over the lazy dog.'];
 
 const store = {
@@ -222,7 +221,7 @@ function pageVoices(main) {
 }
 function voiceCard(v) {
   const m = M(v.model), ok = usable(m), fav = S.settings.favorites.includes(v.ref);
-  const tags = [v.gender ? `${v.gender}声` : '', v.lang, v.kind === 'preset' ? '预设' : '', v.kind === 'clone' ? '克隆' : '', v.kind === 'clone' && v.duration ? `录音 ${Math.round(v.duration)} 秒` : ''].filter(Boolean);
+  const tags = [v.gender ? `${v.gender}声` : '', v.lang, v.kind === 'preset' ? '预设' : '', v.kind === 'clone' ? '克隆' : '', v.kind === 'clone' && m ? m.name.replace(/（克隆）|（云端克隆）/, '') : ''].filter(Boolean);
   const clone = v.kind === 'clone';
   return `<article class="vc" style="--m:${hue(v.model)}" data-ref="${esc(v.ref)}" data-url="${esc(v.sample.url)}">
     <div class="vc-top">
@@ -264,8 +263,32 @@ function bindVoices(main, vs) {
   };
 }
 /* ---------- 克隆音色：上传或录一段声音 ---------- */
+/* 支持克隆的模型：本地在前；默认选能用的本地模型（不花钱、录音不出电脑） */
+const cloneModels = () => S.models.filter(m => isTTS(m) && m.caps.clone).sort((a, b) => (a.provider !== 'local') - (b.provider !== 'local'));
+const cloneDefault = () => { const ms = cloneModels(); return (ms.find(m => m.provider === 'local' && usable(m)) || ms.find(usable) || ms[0])?.id; };
+function cloneModelSelect(id, cur) {
+  const ms = cloneModels(), opt = m => `<option value="${m.id}" ${m.id === cur ? 'selected' : ''}>${esc(m.name)}${usable(m) ? '' : ` · ${STATUS[m.status]}`}${m.clone?.fee ? ' · 收费' : ''}</option>`;
+  const loc = ms.filter(m => m.provider === 'local'), cloud = ms.filter(m => m.provider !== 'local');
+  return `<select class="in" id="${id}">${loc.length ? `<optgroup label="本地">${loc.map(opt).join('')}</optgroup>` : ''}${[...new Set(cloud.map(m => m.provider))].map(pid => `<optgroup label="${esc(PV(pid)?.name || pid)}">${cloud.filter(m => m.provider === pid).map(opt).join('')}</optgroup>`).join('')}</select>`;
+}
+/* 选中模型的说明：在哪里运行、要不要上传、收不收费、要不要同意声明 */
+function cloneModelNote(m) {
+  if (!m) return '';
+  const pv = PV(m.provider)?.name || m.provider;
+  if (m.provider === 'local') return usable(m) ? '在本机运行，录音不出电脑。' : `还没下载（约 ${m.size_gb} GB）。可以先建好，<a href="#/models/local">下载</a>后就能用。`;
+  if (!usable(m)) return `${esc(pv)} 还没连接。可以先建好，<a href="#/models/${m.provider}">连接</a>后再用。`;
+  return [`第一次用时会把录音上传给 ${esc(pv)}，之后复用那边的音色。`, m.clone?.fee ? `收费：${esc(m.clone.fee)}，使用前会再确认。` : '', m.clone?.consent ? '这家要求一段同意声明录音（见下方）。' : ''].filter(Boolean).join('');
+}
+function consentBlock(m, have) {
+  const ph = m?.clone?.consent; if (!ph) return '';
+  return `<div class="cn-consent"><div class="lbl"><span>同意声明录音（${esc(PV(m.provider)?.name || m.provider)} 要求）${have ? ' · 已上传，可替换' : ''}</span></div>
+    <p class="note">请声音的主人本人逐字朗读下面这句并录下来，和上面的录音用同一支麦克风、在同一个环境里录。</p>
+    <q class="consent">${esc(ph.zh)}</q><input type="file" accept="audio/*" class="in" data-consent></div>`;
+}
 function cloneForm() {
   const c = S.cn, f = c.file;
+  if (!c.model || !M(c.model)) c.model = cloneDefault();
+  const cm = M(c.model);
   return `<section class="clone-new">
     <div class="cn-h"><b>克隆一个声音</b><span>一段 10–20 秒的录音：一个人说话、没有背景音乐。录音存在本机；用云端模型说话时，才会上传给那一家。</span></div>
     <div class="cn-src">
@@ -275,15 +298,14 @@ function cloneForm() {
       <button class="btn ${c.rec ? 'danger' : ''}" type="button" id="cnRec">${ic('mic', 15)}${c.rec ? `停止 <span id="cnT">0:00</span>` : '直接录音'}</button>
     </div>
     ${c.url ? `<audio controls src="${c.url}" class="cn-audio"></audio>` : ''}
+    <div class="field"><div class="lbl"><span>用哪个模型</span><span class="key">model</span></div>${cloneModelSelect('cnModel', c.model)}
+      <span class="note" id="cnModelNote">${cloneModelNote(cm)} 换模型不用重录：这个克隆音色以后在任何支持克隆的模型上都能用。</span></div>
     <div class="cn-grid">
       <div class="field"><div class="lbl"><span>名字</span></div><input class="in" id="cnName" value="${esc(c.name || '')}" placeholder="比如：我的声音"></div>
       <div class="field wide"><div class="lbl"><span>文字稿</span><span class="key">录音里说了什么</span></div>
         <textarea class="in" id="cnText" rows="2" placeholder="留空会用本地识别模型自动生成；有准确的文字稿，克隆会更像">${esc(c.text || '')}</textarea></div>
     </div>
-    <details class="adv"><summary>同意声明录音（只有部分云端模型需要）</summary>
-      <p class="note">Gemini 要求声音的主人本人逐字朗读下面这句话并录下来，用同一支麦克风、在同一个环境里录。只用本地模型可以跳过，以后也能在「编辑」里补。</p>
-      <q class="consent">${CONSENT}</q>
-      <input type="file" id="cnConsent" accept="audio/*" class="in"></details>
+    ${consentBlock(cm, !!c.consent)}
     <label class="cn-ok"><input type="checkbox" id="cnOk" ${c.ok ? 'checked' : ''}> 这是我本人的声音，或我已得到声音主人的同意</label>
     <div class="cn-a"><button class="btn primary" type="button" id="cnGo" ${f && c.ok && !c.busy ? '' : 'disabled'}>${c.busy ? '正在处理…' : '创建克隆音色'}</button><span class="note" id="cnHint">${!f ? '先选一段录音' : !c.ok ? '确认后才能创建' : ''}</span></div>
   </section>`;
@@ -299,7 +321,8 @@ function bindCloneForm(main) {
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) pick(f); };
   onText($('#cnName', box), () => c.name = $('#cnName', box).value);
   onText($('#cnText', box), () => c.text = $('#cnText', box).value);
-  $('#cnConsent', box).onchange = e => c.consent = e.target.files[0] || null;
+  const cs = $('[data-consent]', box); if (cs) cs.onchange = e => c.consent = e.target.files[0] || null;
+  $('#cnModel', box).onchange = e => { c.model = e.target.value; redraw(); };
   $('#cnOk', box).onchange = e => { c.ok = e.target.checked; redraw(); };
   $('#cnRec', box).onclick = async () => {
     if (c.rec) return c.rec.stop();
@@ -319,6 +342,7 @@ function bindCloneForm(main) {
     const fd = new FormData();
     fd.append('file', c.file, c.file.name);
     if (c.name?.trim()) fd.append('name', c.name.trim());
+    if (c.model) fd.append('model', c.model);
     if (c.text?.trim()) fd.append('text', c.text.trim());
     if (c.consent) fd.append('consent', c.consent, c.consent.name);
     c.busy = true; redraw();
@@ -326,7 +350,7 @@ function bindCloneForm(main) {
       const r = await fetch('/api/clones', { method: 'POST', body: fd }), j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
       if (c.url) URL.revokeObjectURL(c.url);
-      S.cn = { file: null, url: null, rec: null };
+      S.cn = { file: null, url: null, rec: null, model: c.model };
       await refreshVoices(); pageVoices(main);
       toast(j.text_auto ? `已创建「${j.name}」。文字稿是自动识别的，不准的话点「编辑」改一下` : `已创建「${j.name}」`, 5000);
     } catch (e) { c.busy = false; redraw(); toast(`创建失败：${e.message}`, 6000); }
@@ -335,16 +359,19 @@ function bindCloneForm(main) {
 function editClone(id, main) {
   const c = S.clones.find(x => x.id === id), card = $(`.vc[data-ref="${CSS.escape('clone:' + id)}"]`, main); if (!c || !card) return;
   const p = $('.vc-text', card), foot = $('.vc-foot', card);
-  p.outerHTML = `<div class="cn-edit"><input class="in" value="${esc(c.name)}" data-k="name" aria-label="名字"><textarea class="in" rows="3" data-k="text" aria-label="文字稿">${esc(c.text || '')}</textarea>
+  const v = S.voices.find(x => x.ref === 'clone:' + id), cur = c.model && M(c.model) ? c.model : v?.model || cloneDefault();
+  p.outerHTML = `<div class="cn-edit"><input class="in" value="${esc(c.name)}" data-k="name" aria-label="名字">
+    ${cloneModelSelect('ceModel', cur)}<span class="note" data-k="mnote">${cloneModelNote(M(cur))}</span>
+    <textarea class="in" rows="3" data-k="text" aria-label="文字稿">${esc(c.text || '')}</textarea>
     <span class="note">文字稿要和录音一字不差；改了之后，云端模型下次使用时会重新上传。</span>
-    <label class="note cn-cs">同意声明录音（Gemini 需要）${c.consent ? ' · 已上传，可替换' : ''}：<input type="file" accept="audio/*" data-k="consent"></label>
-    <q class="consent">${CONSENT}</q></div>`;
+    <div data-k="consentBox">${consentBlock(M(cur), c.consent)}</div></div>`;
+  $('#ceModel', card).onchange = e => { const m = M(e.target.value); $('[data-k=mnote]', card).innerHTML = cloneModelNote(m); $('[data-k=consentBox]', card).innerHTML = consentBlock(m, c.consent); };
   foot.innerHTML = `<button class="btn ghost sm danger" type="button" data-k="del">删除</button><span class="sp"></span><button class="btn ghost sm" type="button" data-k="cancel">取消</button><button class="btn primary sm" type="button" data-k="save">保存</button>`;
   $('[data-k=cancel]', foot).onclick = () => pageVoices(main);
   $('[data-k=save]', foot).onclick = async () => {
     try {
-      await api('/api/clones/update', { id, name: $('[data-k=name]', card).value, text: $('[data-k=text]', card).value });
-      const cf = $('[data-k=consent]', card).files[0];
+      await api('/api/clones/update', { id, name: $('[data-k=name]', card).value, text: $('[data-k=text]', card).value, model: $('#ceModel', card).value });
+      const cf = $('[data-consent]', card)?.files[0];
       if (cf) { const fd = new FormData(); fd.append('id', id); fd.append('consent', cf, cf.name); const r = await fetch('/api/clones/consent', { method: 'POST', body: fd }), j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); }
       await refreshVoices(); pageVoices(main); toast('已保存');
     }

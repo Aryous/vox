@@ -372,11 +372,11 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
             continue
         out.append({"ref": f"preset:{v['id']}", "model": v.get("model"), "voice": v.get("voice"), "name": v["name"], "gender": v.get("gender", ""), "lang": v.get("lang_label", ""),
                     "description": v.get("instructions") or "我的预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
-    # 克隆音色不属于某个模型：指定了支持克隆的模型就挂在它下面，否则挂在默认的克隆模型下面（试听用）
-    cm = target if target and target["caps"].get("clone") else (None if target else clone_model(required=False))
-    for c in clones.records() if cm else []:
-        out.append({"ref": f"clone:{c['id']}", "model": cm["id"], "voice": f"clone:{c['id']}", "name": c["name"], "gender": "", "lang": c.get("lang") or "",
-                    "description": c.get("text") or "克隆音色", "kind": "clone", "cloud": cm["provider"] != "local", "duration": c.get("duration"),
+    # 克隆音色不属于某个模型：指定了支持克隆的模型就挂在它下面，否则挂在它的首选模型下面（试听用）
+    for c in clones.records() if not target or target["caps"].get("clone") else []:
+        cm = target or _clone_model_of(c)
+        out.append({"ref": f"clone:{c['id']}", "model": cm["id"] if cm else None, "voice": f"clone:{c['id']}", "name": c["name"], "gender": "", "lang": c.get("lang") or "",
+                    "description": c.get("text") or "克隆音色", "kind": "clone", "cloud": bool(cm) and cm["provider"] != "local", "duration": c.get("duration"),
                     "rev": c["rev"]})
     if lang:
         out = [v for v in out if lang in (v["lang"] or "")]
@@ -470,16 +470,31 @@ def _clone_models_text() -> str:
     return "、".join(catalog.short(m) for m in clones.models_for()) or "（暂无）"
 
 
+def _clone_model_of(c: dict) -> dict | None:
+    """这个克隆音色该用哪个模型：它的首选模型能用就用它，否则用默认的克隆模型。"""
+    m = catalog.find_model(c.get("model") or "")
+    return m if m and m["caps"].get("clone") and usable(m) else clone_model(required=False)
+
+
+def _check_clone_model(mid: str | None):
+    if mid:
+        m = catalog.find_model(mid)
+        if not m or not m["caps"].get("clone"):
+            raise VoxError(f"{mid} 不支持克隆音色。支持克隆的模型：{_clone_models_text()}")
+
+
 def create_clone(src: Path, name: str, **kw) -> dict:
+    _check_clone_model(kw.get("model"))
     try:
         return clones.create(src, name, **kw)
     except clones.CloneError as e:
         raise VoxError(str(e)) from None
 
 
-def update_clone(cid: str, name: str | None = None, text: str | None = None, consent: Path | None = None) -> dict:
+def update_clone(cid: str, name: str | None = None, text: str | None = None, consent: Path | None = None, model: str | None = None) -> dict:
+    _check_clone_model(model)
     try:
-        return clones.update(cid, name, text, consent)
+        return clones.update(cid, name, text, consent, catalog.find_model(model)["id"] if model else None)
     except clones.CloneError as e:
         raise VoxError(str(e)) from None
 
@@ -531,9 +546,13 @@ def normalize(req: dict, strict=True) -> dict:
     if isinstance(req.get("voice"), dict):  # OpenAI 自定义音色对象 {"id": ...}
         req["voice"] = req["voice"].get("id")
     v = req.get("voice")
-    if clones.is_ref(v):   # 克隆音色：不指定模型时用默认的克隆模型
+    if clones.is_ref(v):   # 克隆音色：不指定模型时用它的首选模型，没有或不能用时用默认的克隆模型
         if not req.get("model"):
-            req["model"] = clone_model()["id"]
+            try:
+                cm = _clone_model_of(clones.from_ref(v))
+            except clones.CloneError as e:
+                raise VoxError(str(e)) from None
+            req["model"] = (cm or clone_model())["id"]
     elif isinstance(v, str) and (":" in v):   # 允许 voice 直接写音色引用
         req = {**resolve_voice(v), **{k: x for k, x in req.items() if k != "voice"}}
     m = model_or_raise(req.get("model") or os.environ.get("VOX_MODEL", "local/qwen3"))
