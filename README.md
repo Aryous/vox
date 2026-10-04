@@ -16,7 +16,7 @@ English · [中文](README.zh-CN.md)
 - **Local models, offline.** Qwen3-TTS (CustomVoice and VoiceDesign, every size and quantization published by `mlx-community`) and Kokoro-82M (Chinese). Downloads are verified file by file against HuggingFace hashes.
 - **Cloud providers, same interface.** OpenRouter plus ten providers (list below). Per-provider quirks — where the emotion prompt goes, speed ranges, base64/hex/URL/chunked audio — are handled by adapters so you don't have to.
 - **Custom providers.** Plug in any OpenAI-compatible speech service: a self-hosted Kokoro-FastAPI, a proxy, a vendor vox doesn't know yet, or another vox.
-- **Speech-to-text, same model system.** `vox transcribe meeting.m4a` turns audio or video into text or subtitles (txt / srt / vtt / json) with local models (Qwen3-ASR, MOSS-Transcribe-Diarize, SenseVoice, Fun-ASR, Whisper — all through MLX) or cloud ones; OpenAI-compatible `POST /v1/audio/transcriptions`; a Transcribe page in the web UI. Speaker labels and word timestamps where the model supports them — locally, MOSS labels speakers and sentence timings in one pass, good for meetings, interviews and doctor visits.
+- **Speech-to-text, same model system.** `vox transcribe meeting.m4a` turns audio or video into text or subtitles (txt / srt / vtt / json) with local models (Qwen3-ASR, MOSS-Transcribe-Diarize, SenseVoice, Fun-ASR, Whisper — all through MLX) or cloud ones; OpenAI-compatible `POST /v1/audio/transcriptions`. The web UI has a Transcribe page: drop a file, pick a model and hotwords, read the result colour-coded by speaker, click a sentence to play the just-uploaded file from there, copy it or export subtitles; with no speech-to-text model yet, it downloads one in place and shows progress. Speaker labels and word timestamps where the model supports them — locally, MOSS labels speakers and sentence timings in one pass, good for meetings, interviews and doctor visits.
 - **Hear before you choose.** A voice library where every voice reads the same sample line; a playground with a compare mode: one text, one shared set of tone / speed / seed, and a list of voices or models generated side by side in one click (cost estimate first). Want to tweak one of them? Make a variant of it and compare the two.
 
 | Voice library | Models and providers |
@@ -44,7 +44,7 @@ For development:
 ```bash
 git clone https://github.com/Aryous/vox && cd vox
 uv venv --python 3.12 && uv pip install -e .
-.venv/bin/python tests/test_providers.py     # 39 offline tests, ~1 s
+.venv/bin/python tests/test_providers.py     # 48 offline tests, ~1 s
 ```
 
 ## Quick start
@@ -92,6 +92,18 @@ Identical requests return the cached take; pass `cache: false` (CLI `--no-cache`
 | Custom | any OpenAI-compatible speech service | ✅ tested (self-hosted, no key) |
 
 ⚠️ **Experimental** means the adapter is written from the provider's official docs and covered by offline tests that replay the documented requests and responses, and the real endpoint answered a deliberately invalid key with an authentication error — but it hasn't been run with a real key yet. If you have one, please try it and open an issue either way.
+
+Speech-to-text models (`vox models --task stt --all`):
+
+| Source | Models | Status |
+| --- | --- | --- |
+| Local | Qwen3-ASR 0.6B (text), MOSS-Transcribe-Diarize 0.9B (text, speakers, sentence timings) | ✅ tested (17-minute multi-speaker Chinese conversation) |
+| Local | Qwen3-ASR 1.7B, SenseVoice Small, Fun-ASR-Nano, Whisper large-v3-turbo | ⚠️ registered, not yet tried |
+| OpenAI | `gpt-transcribe`, `gpt-4o-transcribe-diarize` (speaker labels), `whisper-1` | ⚠️ experimental |
+| SiliconFlow | SenseVoice Small (free) | ⚠️ experimental |
+| Custom | any OpenAI-compatible transcription service | ✅ tested against a local mock |
+
+*Experimental* for cloud speech-to-text: written from the official docs and covered by offline tests, but not yet run with a real key.
 
 Where a provider publishes a model list, `vox models fetch <provider>` (or "在线查询" in the UI) pulls the current list. Models that aren't in vox's registry borrow the request format of a known model from the same provider and are marked as *inferred*.
 
