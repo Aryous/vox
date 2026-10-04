@@ -92,7 +92,8 @@ const mine = () => S.models.filter(m => m.mine);
 const isTTS = m => m.task !== 'stt';
 const mineTTS = () => mine().filter(isTTS);
 // 音色 ID 的显示名只取预置音色：「预设」也挂在同一个 model + voice 上，但名字里带着语气等附加信息
-const voiceName = (model, voice) => S.voices.find(v => v.model === model && v.voice === voice && v.kind === 'builtin')?.name || voice;
+const voiceName = (model, voice) => typeof voice === 'string' && voice.startsWith('clone:') ? S.clones.find(c => 'clone:' + c.id === voice)?.name || voice
+  : S.voices.find(v => v.model === model && v.voice === voice && v.kind === 'builtin')?.name || voice;
 
 /* ---------- 全局播放器 ---------- */
 const P = { a: new Audio(), url: null, meta: null };
@@ -478,6 +479,8 @@ function pagePlayground(main) {
   $('#autoAsr', main).onchange = e => { S.autoAsr = e.target.checked; store.set('autoAsr', S.autoAsr); e.target.parentElement.classList.toggle('on', S.autoAsr); };
   $('#feedStar', main).onclick = () => { S.feedStar = !S.feedStar; pagePlayground(main); };
   renderPanel(main); updateCompose(main); renderFeed(main);
+  // 命令行、API 生成的结果也进同一份历史：每次进试音台重新取一次，不用刷新页面
+  api('/api/history?limit=80').then(h => { if (S.route !== 'playground' || S.compare || JSON.stringify(h.map(x => x.id)) === JSON.stringify(S.hist.map(x => x.id))) return; S.hist = h; renderFeed(main); }).catch(() => {});
 }
 function updateCompose(main) {
   $('#count', main).textContent = `${[...S.text].length} 字`;
@@ -679,7 +682,7 @@ function candReq(c) {
 const rkey = r => JSON.stringify(Object.keys(r).sort().map(k => [k, r[k]]));
 const candRes = c => S.cmpRes[rkey(candReq(c))];
 const pending = res => res?.rec || res?.busy || res?.queued;
-const candLabel = c => { const m = M(c.model); return c.voice && m.caps.voices ? voiceName(m.id, c.voice) : m.caps.design ? '声音设计' : '默认音色'; };
+const candLabel = c => { const m = M(c.model); return c.voice && (m.caps.voices || c.voice.startsWith('clone:')) ? voiceName(m.id, c.voice) : m.caps.design ? '声音设计' : '默认音色'; };
 // A、B、C 给原始候选；变体紧跟在原候选后面，叫 B1、B2
 function candTags() {
   const tags = {}, sub = {}; let n = 0;
