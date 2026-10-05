@@ -303,18 +303,32 @@ const LANG_DN = (() => { try { return new Intl.DisplayNames(['zh-CN'], { type: '
 const langName = l => { if (!l || !LANG_DN || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$/.test(l)) return l; try { return LANG_DN.of(l) || l; } catch { return l; } };
 const KINDS = [['all', '全部'], ['builtin', '预置'], ['preset', '预设'], ['clone', '克隆']];
 const KIND_TIP = { builtin: '模型或厂商自带的音色', preset: '音色、语气、语速与种子的组合，在试音台中保存', clone: '基于一段录音生成的音色' };
+// 同一家的几个模型共用一套音色时（如 Gemini 3.8 Flash 与 Flash Lite），音色库里合并成一张卡片。
+// 代表条目取第一个可用的模型（注册表顺序），试听、试音都用它；models / refs 记下全部模型，收藏按组处理。
+function mergeVoices(vs) {
+  const out = [], idx = new Map();
+  for (const v of vs) {
+    if (v.kind !== 'builtin') { out.push(v); continue; }
+    const m = M(v.model), k = `${m?.provider}|${m?.engine || ''}|${v.voice}|${v.name}`, g = idx.get(k);
+    if (g) { g.all.push(v); continue; }
+    const e = { ...v, all: [v] }; idx.set(k, e); out.push(e);
+  }
+  return out.map(e => { if (!e.all || e.all.length < 2) return e; const pick = e.all.find(x => usable(M(x.model))) || e.all[0]; return { ...pick, all: e.all, models: e.all.map(x => x.model), refs: e.all.map(x => x.ref) }; });
+}
+const refsOf = v => v.refs || [v.ref];
 function filteredVoices(skip) {
   const f = S.vf, q = f.q.trim().toLowerCase(), builtin = f.kind === 'all' || f.kind === 'builtin';
   const okModel = v => { if (!f.model || !builtin) return true; const m = M(v.model); return v.kind === 'builtin' && (f.model.startsWith('p:') ? m?.provider === f.model.slice(2) : v.model === f.model); };
-  return S.voices.filter(v => (f.kind === 'all' || v.kind === f.kind) && okModel(v)
+  return mergeVoices(S.voices.filter(v => (f.kind === 'all' || v.kind === f.kind) && okModel(v)
     && (skip === 'lang' || !builtin || !f.lang || v.lang === f.lang) && (!builtin || !f.gender || v.gender === f.gender) && (!f.fav || S.settings.favorites.includes(v.ref))
-    && (!q || `${v.ref} ${v.name} ${v.description} ${v.lang} ${langName(v.lang)}`.toLowerCase().includes(q)));
+    && (!q || `${v.ref} ${v.name} ${v.description} ${v.lang} ${langName(v.lang)}`.toLowerCase().includes(q))));
 }
 const setVf = (main, patch) => { Object.assign(S.vf, patch); S.vlimit = 60; store.set('vf', S.vf); pageVoices(main); };
 function pageVoices(main) {
   const vs = filteredVoices(), f = S.vf, ms = mine().filter(m => m.caps.voices), builtin = f.kind === 'all' || f.kind === 'builtin';
   const local = ms.filter(m => m.provider === 'local'), provs = [...new Set(ms.filter(m => m.provider !== 'local').map(m => m.provider))];
-  const n = { all: S.voices.length, builtin: S.voices.filter(v => v.kind === 'builtin').length, preset: S.voices.filter(v => v.kind === 'preset').length, clone: S.clones.length };
+  const nb = mergeVoices(S.voices.filter(v => v.kind === 'builtin')).length;
+  const n = { all: nb + S.voices.filter(v => v.kind !== 'builtin').length, builtin: nb, preset: S.voices.filter(v => v.kind === 'preset').length, clone: S.clones.length };
   const langs = Object.entries(filteredVoices('lang').reduce((a, v) => (v.lang && v.kind === 'builtin' && (a[v.lang] = (a[v.lang] || 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
   const cloudOff = S.providers.filter(p => p.kind === 'cloud' && !p.connected).length;
   main.innerHTML = `
@@ -348,25 +362,25 @@ function pageVoices(main) {
   bindVoices(main, vs);
 }
 function voiceCard(v) {
-  const m = M(v.model), ok = usable(m), fav = S.settings.favorites.includes(v.ref), clone = v.kind === 'clone';
+  const m = M(v.model), ok = usable(m), fav = refsOf(v).some(r => S.settings.favorites.includes(r)), clone = v.kind === 'clone', multi = v.models?.length > 1;
   const c = clone ? S.clones.find(x => 'clone:' + x.id === v.ref) : null;
   const tags = clone ? [] : [v.kind === 'preset' ? '预设' : '', v.gender ? `${v.gender}声` : '', langName(v.lang)].filter(Boolean);
   const mname = m ? mName(m) : '';
   return `<article class="vc ${clone ? 'is-clone' : ''}" style="--m:${hue(v.model)}" data-ref="${esc(v.ref)}" data-url="${esc(v.sample.url)}">
     <div class="vc-top">
       <button class="pb" type="button" data-sample="${esc(v.ref)}" data-url="${esc(v.sample.url)}" ${ok ? '' : 'disabled'} aria-label="试听 ${esc(v.name)}" title="${clone ? `用 ${esc(mname)} 读样本文本` : '试听样本'}">${ic('play', 14)}</button>
-      <div class="vc-name"><b>${esc(v.name)}</b><code>${esc(v.ref)}</code></div>
-      <button class="star ${fav ? 'on' : ''}" type="button" data-fav="${esc(v.ref)}" aria-pressed="${fav}" aria-label="收藏 ${esc(v.name)}">${ic('star', 16)}</button>
+      <div class="vc-name"><b>${esc(v.name)}</b>${multi ? `<code title="可用于：${esc(v.models.map(x => mName(M(x))).join('、'))}。试听和试音默认使用 ${esc(mname)}">${esc(pvName(m.provider))} · ${v.models.length} 个模型</code>` : `<code>${esc(v.ref)}</code>`}</div>
+      <button class="star ${fav ? 'on' : ''}" type="button" data-fav="${esc(refsOf(v).join(' '))}" aria-pressed="${fav}" aria-label="收藏 ${esc(v.name)}">${ic('star', 16)}</button>
     </div>
     ${clone ? `<p class="vc-text" title="录音的文字稿">${c?.text ? `「${esc(c.text)}」` : '<span class="mute">暂无文字稿。补充准确的文字稿可提升克隆效果</span>'}</p>
       <div class="vc-meta">${c ? `<span>录音 ${Math.round(c.duration)} 秒</span>` : ''}${m ? `<span class="mtag"><i class="dot"></i>${esc(mname)}</span>` : ''}${c?.consent ? '<span>有同意声明</span>' : ''}</div>`
-      : `<p>${esc(v.description) || '<span class="mute">没有描述</span>'}</p>`}
+      : `<p>${esc(v.description) || '<span class="mute">暂无描述</span>'}</p>`}
     <canvas class="mini" data-url="${esc(v.sample.url)}" ${v.sample.cached ? '' : 'hidden'}></canvas>
     <div class="vc-foot">
       ${clone ? `<button class="btn ghost sm" type="button" data-orig="${esc(v.ref.slice(6))}" title="播放原始录音">${ic('mic', 13)}原声</button><button class="btn ghost sm" type="button" data-cedit="${esc(v.ref.slice(6))}">${ic('edit', 13)}编辑</button>`
         : `<span class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>`}
       <span class="sp"></span>
-      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音${ic('arrow', 13)}</a>` : clone && !m ? `<a class="btn sm" href="#/models/local" title="需要支持克隆的模型">下载克隆模型</a>` : `<a class="btn sm" href="#/models/${m?.provider || 'local'}">${m ? (m.provider === 'local' ? '去下载模型' : '去连接') : '模型已移除'}</a>`}
+      ${ok ? `<a class="btn sm" href="#/playground" data-try="${esc(v.ref)}">试音${ic('arrow', 13)}</a>` : clone && !m ? `<a class="btn sm" href="#/models/local" title="需要支持克隆的模型">下载克隆模型</a>` : `<a class="btn sm" href="#/models/${m?.provider || 'local'}">${m ? (m.provider === 'local' ? '前往下载' : '前往连接') : '模型已移除'}</a>`}
     </div></article>`;
 }
 function bindVoices(main, vs) {
@@ -572,10 +586,12 @@ async function playSample(ref, btn) {
   } catch (e) { toast(`样本生成失败：${e.message}`, 5000); }
   finally { others.forEach(b => b.classList.remove('busy')); }
 }
-async function toggleFav(ref, btn) {
-  const f = new Set(S.settings.favorites); f.has(ref) ? f.delete(ref) : f.add(ref);
+// refs：空格分隔。合并卡片的几个引用算一组：有任意一个已收藏就整组取消，否则收藏代表条目
+async function toggleFav(refs, btn) {
+  const rs = refs.split(' '), f = new Set(S.settings.favorites), on = rs.some(r => f.has(r));
+  on ? rs.forEach(r => f.delete(r)) : f.add(rs[0]);
   S.settings = await api('/api/settings', { favorites: [...f] });
-  if (btn) { const on = S.settings.favorites.includes(ref); btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); }
+  if (btn) { const now = rs.some(r => S.settings.favorites.includes(r)); btn.classList.toggle('on', now); btn.setAttribute('aria-pressed', now); }
   const ff = $('#ffav .n'); if (ff) ff.textContent = S.settings.favorites.length;
 }
 /* ============ 试音台 ============

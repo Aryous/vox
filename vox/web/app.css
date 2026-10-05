@@ -706,3 +706,4 @@ mark.cur{background:var(--star);color:#111}
 @media (hover:hover){.hr [data-hadd]{opacity:0;transition:opacity .15s}.hr:hover [data-hadd],.hr:focus-within [data-hadd]{opacity:1}}
 .insp-t span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .compose-go .btn.lg{margin-left:auto}
+.vc-foot .tags+.sp{display:none}
