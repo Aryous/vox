@@ -70,7 +70,7 @@ class Gemini(CloudEngine):
         try:
             data = j["candidates"][0]["content"]["parts"][0]["inlineData"]
         except (KeyError, IndexError):
-            raise ProviderError(f"Gemini 没有返回音频：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"Gemini 未返回音频：{json.dumps(j, ensure_ascii=False)[:300]}")
         audio = b64(data["data"])
         # 带 RIFF 头就是 wav；否则按官方默认的无头 L16 24k 单声道处理
         return (audio, "wav") if audio[:4] == b"RIFF" else (audio, "s16le:24000:1")
@@ -79,8 +79,8 @@ class Gemini(CloudEngine):
     def clone_create(self, ref):
         if not ref.get("consent"):
             phrase = self.m["compat"]["clone"]["consent"]   # 规定的原话在注册表里（compat.clone.consent），页面也从那里取
-            raise ProviderError(f"Gemini 要求声音的主人本人朗读一句同意声明并上传：「{phrase['zh']}」（英文：{phrase['en']}）。"
-                                f"录好后运行 vox clones edit {ref['id']} --consent 录音.m4a，或在网页音色库里编辑这个克隆音色")
+            raise ProviderError(f"Gemini 要求声音所有者本人朗读并上传同意声明：「{phrase['zh']}」（英文：{phrase['en']}）。"
+                                f"录制后运行 vox clones edit {ref['id']} --consent 录音.m4a，或在网页音色库中编辑该克隆音色")
         src, _ = clone_file(ref)
         consent, _ = clone_file(ref, key="consent")
         audio = lambda p: {"mime_type": "audio/wav", "data": base64.b64encode(p.read_bytes()).decode()}
@@ -90,7 +90,7 @@ class Gemini(CloudEngine):
         j = json.loads(raw)
         vid = j.get("id") or (j.get("name") or "").split("/")[-1]
         if not vid:
-            raise ProviderError(f"Gemini 没有返回音色 ID：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"Gemini 未返回音色 ID：{json.dumps(j, ensure_ascii=False)[:300]}")
         return {"voice": vid, **({"expire_time": j["expire_time"]} if j.get("expire_time") else {})}
 
     def clone_delete(self, remote):

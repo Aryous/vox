@@ -46,11 +46,11 @@ def run(pid: str) -> dict:
     p = catalog.PROVIDERS.get(pid)
     d = supported(pid)
     if not p:
-        raise ProviderError(f"未知的 Provider「{pid}」")
+        raise ProviderError(f"未知的 Provider：{pid}")
     if not d:
-        raise ProviderError(f"{p['name']} 没有公开的模型列表接口，只能手动填模型 ID")
+        raise ProviderError(f"{p['name']} 未提供公开的模型列表接口，请手动填模型 ID")
     if needs_key(pid) and not all(credentials.get(c["env"]) for c in p.get("credentials", [])):
-        raise ProviderError(f"先连接 {p['name']}（填 Key），再获取模型列表")
+        raise ProviderError(f"请先连接 {p['name']}（填写 Key），再获取模型列表")
     items = KINDS[d["kind"]](pid, p, d)
     for it in items:
         it.setdefault("provider", pid)

@@ -50,8 +50,8 @@ def default_model() -> dict:
         if hub.usable(m):
             return m
     local = next((m for m in catalog.MODELS if m["task"] == "stt" and m["provider"] == "local"), None)
-    hint = f"下载一个本地识别模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "先添加一个识别模型"
-    raise VoxError(f"还没有能用的语音识别模型。{hint}；或连接支持识别的云端 Provider，见 vox models --task stt --all")
+    hint = f"可下载本地识别模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "请先添加识别模型"
+    raise VoxError(f"暂无可用的语音识别模型。{hint}；也可连接支持识别的云端 Provider（vox models --task stt --all）")
 
 
 def local_model() -> dict | None:
@@ -67,8 +67,8 @@ def _model(mid: str | None) -> dict:
         return default_model()
     m = hub.model_or_raise(mid)
     if m["task"] != "stt":
-        others = ", ".join(catalog.short(x) for x in stt_models()) or "（还没有，见 vox models --task stt --all）"
-        raise VoxError(f"{m['id']} 是语音合成模型，不能识别。已添加的识别模型：{others}")
+        others = ", ".join(catalog.short(x) for x in stt_models()) or "无（查看可用模型：vox models --task stt --all）"
+        raise VoxError(f"{m['id']} 是语音合成模型，不支持识别。已添加的识别模型：{others}")
     return m
 
 
@@ -90,7 +90,7 @@ def normalize(req: dict) -> dict:
         if _truthy(req.get(k)):
             if not caps.get(need):
                 able = [catalog.short(x) for x in catalog.MODELS if x["task"] == "stt" and x["caps"].get(need)]
-                raise VoxError(f"{m['name']} 不支持{what}。支持的模型：{', '.join(able) or '（暂无）'}")
+                raise VoxError(f"{m['name']} 不支持{what}。支持的模型：{', '.join(able) or '暂无'}")
             out[k] = True
     return out
 
@@ -216,7 +216,7 @@ def records(limit: int | None = None) -> list[dict]:
 def get(cid: str) -> dict:
     f = DIR / f"{cid}.json"
     if not (len(cid) == 16 and all(c in "0123456789abcdef" for c in cid)) or not f.exists():
-        raise VoxError("找不到这条转写")
+        raise VoxError("转写记录不存在")
     return json.loads(f.read_text())
 
 
@@ -239,8 +239,8 @@ def _ts(sec: float, sep: str) -> str:
 def _cues(rec: dict) -> list[dict]:
     if not rec.get("timed") or not rec.get("segments"):
         timed = [catalog.short(m) for m in catalog.MODELS if m["task"] == "stt" and (m["caps"].get("segments") or m["caps"].get("diarize"))]
-        raise VoxError(f"这条转写没有分句时间戳（{rec['request']['model']} 只给整段文本），导不出字幕。"
-                       f"要字幕请换带时间戳的模型：{', '.join(timed) or '（暂无）'}")
+        raise VoxError(f"该转写没有分句时间戳（{rec['request']['model']} 仅输出整段文本），无法导出字幕。"
+                       f"如需字幕，请使用支持时间戳的模型：{', '.join(timed) or '暂无'}")
     return rec["segments"]
 
 
@@ -266,4 +266,4 @@ def render(rec: dict, fmt: str = "txt") -> str:
         return "\n".join(f"{i}\n{_ts(s['start'], ',')} --> {_ts(s['end'], ',')}\n{_line(s)}\n" for i, s in enumerate(_cues(rec), 1))
     if fmt == "vtt":
         return "WEBVTT\n\n" + "\n".join(f"{_ts(s['start'], '.')} --> {_ts(s['end'], '.')}\n{_line(s)}\n" for s in _cues(rec))
-    raise VoxError(f"不支持的格式 {fmt}，可选：{', '.join(FORMATS)}")
+    raise VoxError(f"不支持的格式 {fmt}。可选格式：{', '.join(FORMATS)}")

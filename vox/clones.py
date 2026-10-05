@@ -41,7 +41,7 @@ class CloneError(ValueError):
 # ---------- 存取 ----------
 def _dir(cid: str) -> Path:
     if not re.fullmatch(r"[\w一-鿿-]{1,64}", cid or ""):
-        raise CloneError(f"没有克隆音色 {PREFIX}{cid}")
+        raise CloneError(f"克隆音色 {PREFIX}{cid} 不存在")
     return DIR / cid
 
 
@@ -59,7 +59,7 @@ def records() -> list[dict]:
 def get(cid: str) -> dict:
     f = _dir(cid) / "clone.json"
     if not f.exists():
-        raise CloneError(f"没有克隆音色 {PREFIX}{cid}（vox clones 查看已有的）")
+        raise CloneError(f"克隆音色 {PREFIX}{cid} 不存在。查看已有克隆音色：vox clones")
     return json.loads(f.read_text())
 
 
@@ -100,7 +100,7 @@ def _normalize(src: Path, out: Path) -> float:
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "24000",
                         "-af", f"{trim},areverse,{trim},areverse", "-t", str(MAX_SEC), str(out)], capture_output=True, text=True)
     if r.returncode:
-        raise CloneError(f"读不了这个文件（{src.name}）：{r.stderr.strip()[:200]}")
+        raise CloneError(f"无法读取文件 {src.name}：{r.stderr.strip()[:200]}")
     return audio.duration(out)
 
 
@@ -128,7 +128,7 @@ def create(src: Path, name: str, text: str | None = None, lang: str | None = Non
     dur = _normalize(src, wav.with_suffix(".tmp.wav"))
     if dur < MIN_SEC:
         wav.with_suffix(".tmp.wav").unlink(missing_ok=True)
-        raise CloneError(f"有效录音只有 {dur:.1f} 秒，至少要 {MIN_SEC:.0f} 秒（建议 10–20 秒、一个人、没有背景音乐）")
+        raise CloneError(f"有效录音时长为 {dur:.1f} 秒，至少需要 {MIN_SEC:.0f} 秒。建议使用 10–20 秒、无背景音乐的单人人声")
     wav.with_suffix(".tmp.wav").replace(wav)
     if consent:
         _normalize(Path(consent), d / "consent.wav")

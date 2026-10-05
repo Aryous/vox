@@ -49,5 +49,5 @@ class Volcengine(CloudEngine):
             if j.get("data"):
                 chunks.append(base64.b64decode(j["data"]))
         if not chunks:
-            raise ProviderError("豆包没有返回音频" + ("" if done else "（响应中也没有结束标志）"))
+            raise ProviderError("豆包未返回音频" + ("" if done else "（响应中缺少结束标志）"))
         return b"".join(chunks), "mp3"

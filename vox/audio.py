@@ -11,7 +11,7 @@ FORMATS = {"wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac", "opus"
 
 def _ff():
     if not shutil.which("ffmpeg"):
-        raise SystemExit("需要 ffmpeg：brew install ffmpeg")
+        raise SystemExit("缺少 ffmpeg。安装方式：brew install ffmpeg")
 
 
 def duration(p: Path) -> float:
@@ -41,7 +41,7 @@ def convert(src: Path, fmt: str) -> Path:
     if fmt == "wav":
         return src
     if fmt not in FORMATS:
-        raise ValueError(f"不支持的格式 {fmt}，可选：{', '.join(FORMATS)}")
+        raise ValueError(f"不支持的格式 {fmt}。可选格式：{', '.join(FORMATS)}")
     out = src.with_suffix("." + ("raw" if fmt == "pcm" else "ogg" if fmt == "opus" else fmt))
     if out.exists():
         return out
@@ -76,7 +76,7 @@ def to_wav16k(src: Path, out: Path) -> float:
     out.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", str(out)], capture_output=True, text=True)
     if r.returncode:
-        raise ValueError(f"读不了这个文件（{src.name}）：{r.stderr.strip()[:200]}")
+        raise ValueError(f"无法读取文件 {src.name}：{r.stderr.strip()[:200]}")
     return duration(out)
 
 
@@ -91,7 +91,7 @@ def for_upload(src: Path, formats: list[str] | None, max_mb: float | None, work:
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", str(out)],
                        capture_output=True, text=True)
     if r.returncode:
-        raise ValueError(f"读不了这个文件（{src.name}）：{r.stderr.strip()[:200]}")
+        raise ValueError(f"无法读取文件 {src.name}：{r.stderr.strip()[:200]}")
     if max_mb and out.stat().st_size / 1e6 > max_mb:
-        raise ValueError(f"文件太长：压缩后仍有 {out.stat().st_size / 1e6:.0f} MB，超过这家 {max_mb:.0f} MB 的上限；可以先切成几段，或换本地模型")
+        raise ValueError(f"文件过大：压缩后为 {out.stat().st_size / 1e6:.0f} MB，超过该服务商 {max_mb:.0f} MB 的上限。请分段处理，或改用本地模型")
     return out

@@ -42,7 +42,7 @@ def http(method: str, url: str, headers: dict | None = None, body=None, timeout=
         payload = e.read()
         raise ProviderError(f"HTTP {e.code}：{_err_text(payload) or e.reason}") from None
     except urllib.error.URLError as e:
-        raise ProviderError(f"连不上 {url.split('/')[2]}：{e.reason}") from None
+        raise ProviderError(f"无法连接 {url.split('/')[2]}：{e.reason}") from None
     except TimeoutError:
         raise ProviderError(f"请求超时（{timeout}s）") from None
     except (httpclient.HTTPException, ConnectionError, OSError) as e:   # 对方断开连接、返回的不是 HTTP 等
@@ -140,7 +140,7 @@ class CloudEngine:
     def cred(self, env: str, required=True) -> str | None:
         v = credentials.get(env)
         if required and not v:
-            raise ProviderError(f"还没配置 {env}：vox keys set {env}，或在 WebUI「模型」页选中这家后粘贴")
+            raise ProviderError(f"尚未配置 {env}。配置方式：vox keys set {env}，或在网页「模型」页选择该 Provider 后填写")
         return v
 
     def is_ready(self) -> bool:
@@ -203,14 +203,14 @@ class CloudEngine:
 
     # ---- 识别 ----
     def transcribe(self, req: dict, audio: Path) -> dict:
-        raise ProviderError(f"{self.m['name']} 的适配器还不支持语音识别")
+        raise ProviderError(f"{self.m['name']} 的适配器暂不支持语音识别")
 
     # ---- 克隆音色 ----
     # compat.clone.mode = "voice"：clone_create 把录音注册成这家的音色，返回 {"voice": 音色 ID, ...}，合成时 req["voice"] 就是这个 ID；
     #                    = "inline"：不注册，合成时 req["_clone"] 带着录音（audio 路径、text 文字稿），适配器自己放进请求。
     # ref 字段：id（vox 里的 ID）/ name / audio（24 kHz 单声道 wav 路径）/ text（文字稿，可能为空）/ lang / consent（同意声明录音路径或 None）
     def clone_create(self, ref: dict) -> dict:
-        raise ProviderError(f"{self.m['name']} 的适配器还不支持声音克隆")
+        raise ProviderError(f"{self.m['name']} 的适配器暂不支持声音克隆")
 
     def clone_delete(self, remote: dict):
         """删除云端注册的音色（没有删除接口的厂商什么也不做）。"""

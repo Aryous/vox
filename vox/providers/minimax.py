@@ -32,7 +32,7 @@ def to_emotion(text: str) -> str:
     for emo, words in EMOTIONS.items():
         if any(w in t for w in words):
             return emo
-    raise ProviderError(f"MiniMax 只支持情绪枚举：{', '.join(EMOTIONS)}（可写中文，如「开心」「平静」）；复杂的语气可以在文本里用 (laughs)(sighs) 等标签")
+    raise ProviderError(f"MiniMax 仅支持情绪枚举：{', '.join(EMOTIONS)}（也可使用中文，如「开心」「平静」）。更细致的语气可在文本中使用 (laughs)(sighs) 等标签")
 
 
 class MiniMax(CloudEngine):
@@ -75,7 +75,7 @@ class MiniMax(CloudEngine):
         self._check(j)
         hexaudio = (j.get("data") or {}).get("audio")
         if not hexaudio:
-            raise ProviderError("MiniMax 没有返回音频")
+            raise ProviderError("MiniMax 未返回音频")
         return bytes.fromhex(hexaudio), "mp3"
 
     # ---- 快速复刻 ----
@@ -87,7 +87,7 @@ class MiniMax(CloudEngine):
         self._check(j)
         fid = (j.get("file") or {}).get("file_id")
         if not fid:
-            raise ProviderError(f"MiniMax 上传录音没有返回 file_id：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"MiniMax 上传录音后未返回 file_id：{json.dumps(j, ensure_ascii=False)[:300]}")
         vid = remote_id(ref, "vox", 40)
         _, _, raw = http("POST", f"{self.base}/v1/voice_clone", self._h(), {"file_id": fid, "voice_id": vid, "need_noise_reduction": False}, timeout=180)
         j = json.loads(raw)

@@ -27,12 +27,12 @@ class MiMo(CloudEngine):
         if req.get("instructions"):
             msgs.append({"role": "user", "content": req["instructions"]})
         elif design:
-            raise ProviderError("声音设计模型需要 instructions 描述声音")
+            raise ProviderError("声音设计模型需要通过 instructions 提供声音描述")
         msgs.append({"role": "assistant", "content": req["input"]})
         audio = {"format": "wav"}
         if self.m["remote"].endswith("voiceclone"):
             if not req.get("_clone"):
-                raise ProviderError("MiMo 克隆模型只能用克隆音色（-v clone:<id>）")
+                raise ProviderError("MiMo 克隆模型仅支持克隆音色，请使用 -v clone:<id>")
             audio["voice"] = data_uri(clone_file(req["_clone"])[0])
         elif not design:
             audio["voice"] = req.get("voice") or "mimo_default"
@@ -42,5 +42,5 @@ class MiMo(CloudEngine):
         try:
             data = j["choices"][0]["message"]["audio"]["data"]
         except (KeyError, IndexError, TypeError):
-            raise ProviderError(f"MiMo 没有返回音频：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"MiMo 未返回音频：{json.dumps(j, ensure_ascii=False)[:300]}")
         return b64(data), "wav"

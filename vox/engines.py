@@ -136,7 +136,7 @@ class _MlxRepo(Engine):
         if not self._m:
             src = self._src()
             if not src:
-                raise SystemExit(f"模型未下载：先运行 vox models add {self.model}（走 ModelScope 并按 HuggingFace 哈希校验）")
+                raise SystemExit(f"模型尚未下载。下载命令：vox models add {self.model}（经 ModelScope 下载，按 HuggingFace 哈希校验）")
             with contextlib.redirect_stdout(sys.stderr):  # 库在加载时会往 stdout 打日志
                 self._m = self._loader()(src)
         return self._m
@@ -203,7 +203,7 @@ class Qwen3Design(_Qwen3):
     def synth(self, text, voice=None, instruct=None, speed=1.0, lang="chinese", seed=None, **gen):
         desc = instruct or voice
         if not desc:
-            raise SystemExit("qwen3-design 需要用 -i 描述声音")
+            raise SystemExit("qwen3-design 需要通过 -i 提供声音描述")
         m = self._load()
         self._seed(seed)
         return self._collect(m.generate_voice_design(text=text, instruct=desc, language=lang, **self._gen(gen))), m.sample_rate
@@ -283,7 +283,7 @@ class MlxClone(_Qwen3):
         import inspect
 
         if not clone:
-            raise ValueError(f"{self.model} 只能用克隆音色（-v clone:<id>）")
+            raise ValueError(f"{self.model} 仅支持克隆音色，请使用 -v clone:<id>")
         m = self._load()
         self._seed(seed)
         accepts = inspect.signature(m.generate).parameters
@@ -327,7 +327,7 @@ def get(m: dict) -> Engine:
     """按模型字典取引擎实例（engine 字段选类，repo 字段选仓库）。"""
     name = m["engine"]
     if name not in ENGINES:
-        raise SystemExit(f"未知引擎 {name}，可选：{', '.join(ENGINES)}")
+        raise SystemExit(f"未知引擎 {name}。可选引擎：{', '.join(ENGINES)}")
     e = _live.get(m["id"])
     if e is None or e.model != (m.get("repo") or ENGINES[name].model):
         e = _live[m["id"]] = ENGINES[name](m.get("repo"))
