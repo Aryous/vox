@@ -11,6 +11,10 @@
   speed           [最小, 最大]，超出按边界裁剪；null 表示不传 speed，改由 ffmpeg 变速（OpenRouter：各家支持不一）
   voice_prefix    音色要带模型前缀（硅基：FunAudioLLM/CosyVoice2-0.5B:alex）
   extra           每次请求附加的固定字段
+  clone           声音克隆（可选）：kind 选各家的注册接口
+                  siliconflow  POST {base}/uploads/audio/voice（JSON，data URI + 必填文字稿）→ uri；删除 POST {base}/audio/voice/deletions
+                  inworld      POST https://api.inworld.ai/voices/v1/voices:clone（Basic 鉴权，base64 样本）→ voiceId；删除 DELETE …/voices/{id}
+                  stepfun      POST {base}/files（purpose=storage）→ POST {base}/audio/voices → voice-tone-…（复刻成功即扣费，没有删除接口）
 
 识别（注册表 providers.<id>.stt.compat 与 stt_models[].compat）：
   response        要的返回格式：json（只有文本）/ verbose_json（分句 + 逐词时间戳，whisper-1）/ diarized_json（带说话人）
@@ -28,7 +32,11 @@ from urllib.parse import quote
 from .. import credentials
 from pathlib import Path
 
-from .base import CloudEngine, ProviderError, clamp, http, multipart
+import base64
+
+from .base import CloudEngine, ProviderError, clamp, clone_file, data_uri, http, multipart, remote_id
+
+INWORLD_VOICES = "https://api.inworld.ai/voices/v1/voices"
 
 CJK = re.compile(r"[㐀-鿿぀-ヿ가-힯]")
 
@@ -143,3 +151,49 @@ class OpenAICompat(CloudEngine):
         if not isinstance(j, dict):
             raise ProviderError(f"识别结果格式不对：{raw[:200].decode('utf-8', 'replace')}")
         return parse_transcription(j)
+
+    # ---- 声音克隆（按 compat.clone.kind 选注册接口）----
+    def clone_create(self, ref):
+        kind = self.c.get("clone", {}).get("kind")
+        if kind == "siliconflow":
+            if not ref.get("text"):
+                raise ProviderError("硅基流动要求参考录音的文字稿：先给这个克隆音色补上文字稿（vox clones edit <id> --text …）")
+            f, cut = clone_file(ref, max_sec=29)
+            if cut:
+                raise ProviderError("硅基流动要求参考录音短于 30 秒")
+            body = {"model": self.m["remote"], "customName": remote_id(ref, "vox", 32), "audio": data_uri(f), "text": ref["text"]}
+            _, _, raw = http("POST", f"{self.base}/uploads/audio/voice", self._h(), body, timeout=180)
+            uri = json.loads(raw).get("uri")
+            if not uri:
+                raise ProviderError(f"硅基流动没有返回音色 uri：{raw[:300].decode('utf-8', 'replace')}")
+            return {"voice": uri}
+        if kind == "inworld":
+            f, cut = clone_file(ref, max_sec=30)
+            sample = {"audioData": base64.b64encode(f.read_bytes()).decode(), **({"transcription": ref["text"]} if ref.get("text") and not cut else {})}
+            body = {"displayName": ref["name"][:64], "voiceSamples": [sample], "tags": ["vox"]}
+            _, _, raw = http("POST", f"{INWORLD_VOICES}:clone", {"Authorization": f"Basic {self.cred(self.m['key_env'])}"}, body, timeout=180)
+            vid = (json.loads(raw).get("voice") or {}).get("voiceId")
+            if not vid:
+                raise ProviderError(f"Inworld 没有返回 voiceId：{raw[:300].decode('utf-8', 'replace')}")
+            return {"voice": vid}
+        if kind == "stepfun":
+            f, cut = clone_file(ref, max_sec=10)   # 阶跃要求 5–10 秒
+            body, ctype = multipart([("purpose", "storage")], [("file", f)])
+            _, _, raw = http("POST", f"{self.base}/files", {**self._h(), "Content-Type": ctype}, body, timeout=180)
+            fid = json.loads(raw).get("id")
+            if not fid:
+                raise ProviderError(f"阶跃上传录音没有返回文件 ID：{raw[:300].decode('utf-8', 'replace')}")
+            req = {"model": self.m["remote"], "file_id": fid, **({"text": ref["text"]} if ref.get("text") and not cut else {})}
+            _, _, raw = http("POST", f"{self.base}/audio/voices", self._h(), req, timeout=180)
+            vid = json.loads(raw).get("id")
+            if not vid:
+                raise ProviderError(f"阶跃没有返回音色 ID：{raw[:300].decode('utf-8', 'replace')}")
+            return {"voice": vid}
+        return super().clone_create(ref)
+
+    def clone_delete(self, remote):
+        kind = self.c.get("clone", {}).get("kind")
+        if kind == "siliconflow":
+            http("POST", f"{self.base}/audio/voice/deletions", self._h(), {"uri": remote["voice"]}, timeout=30)
+        elif kind == "inworld":
+            http("DELETE", f"{INWORLD_VOICES}/{quote(remote['voice'], safe='')}", {"Authorization": f"Basic {self.cred(self.m['key_env'])}"}, timeout=30)

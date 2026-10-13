@@ -5,13 +5,15 @@
   所以把 instructions 包成一个前置标签；其他型号不支持，目录里不开这项能力。
 - speed：v3 不接受 voice_settings.speed（官方说由标签控制），交给 ffmpeg 变速；Flash / Multilingual 原生 0.7–1.2。
 - seed：官方支持（尽力确定性）。
+即时克隆（IVC）：POST /v1/voices/add（multipart：name + files），返回 voice_id，之后和预置音色一样用；删除 DELETE /v1/voices/{id}。
+  官方建议 mp3 ≥192 kbps（wav 不提升效果），所以上传前转成 mp3。文档 https://elevenlabs.io/docs/api-reference/voices/ivc/create
 """
 from __future__ import annotations
 
 import json
 from urllib.parse import quote
 
-from .base import CloudEngine, ProviderError, clamp, http
+from .base import CloudEngine, ProviderError, clamp, clone_file, http, multipart
 
 BASE = "https://api.elevenlabs.io"
 
@@ -60,3 +62,16 @@ class ElevenLabs(CloudEngine):
             body["language_code"] = {"chinese": "zh", "english": "en", "japanese": "ja", "korean": "ko"}.get(req["lang"], req["lang"][:2])
         _, _, audio = http("POST", f"{BASE}/v1/text-to-speech/{quote(voice)}?output_format=mp3_44100_128", self._h(), body)
         return audio, "mp3"
+
+    # ---- 即时克隆 ----
+    def clone_create(self, ref):
+        f, _ = clone_file(ref, "mp3")
+        body, ctype = multipart([("name", ref["name"][:100]), ("description", "vox 克隆音色")], [("files", f)])
+        _, _, raw = http("POST", f"{BASE}/v1/voices/add", {**self._h(), "Content-Type": ctype}, body, timeout=180)
+        j = json.loads(raw)
+        if not j.get("voice_id"):
+            raise ProviderError(f"ElevenLabs 没有返回 voice_id：{json.dumps(j, ensure_ascii=False)[:300]}")
+        return {"voice": j["voice_id"], **({"requires_verification": True} if j.get("requires_verification") else {})}
+
+    def clone_delete(self, remote):
+        http("DELETE", f"{BASE}/v1/voices/{quote(remote['voice'], safe='')}", self._h(), timeout=30)

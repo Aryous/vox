@@ -327,13 +327,16 @@ class ModelListTest(unittest.TestCase):
         search = [{"id": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit", "downloads": 944},
                   {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", "downloads": 5703},
                   {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "downloads": 5156},
+                  {"id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "downloads": 812},
                   {"id": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit", "downloads": 2499}]
         tree = [{"type": "file", "path": "model.safetensors", "size": 1_500_000_000}, {"type": "file", "path": "config.json", "size": 2000}]
-        r, calls = self._discover("local", search, tree, tree, tree)
+        r, calls = self._discover("local", search, *[tree] * 6)
         self.assertEqual(calls[0]["headers"], {})
         ids = [m["id"] for m in r["models"]]
         self.assertIn("local/qwen3-tts-0.6b-customvoice-4bit", ids)
-        self.assertNotIn("local/qwen3-tts-1.7b-base-8bit", ids)                        # Base（克隆）没有对应引擎，不列
+        self.assertNotIn("local/qwen3-tts-1.7b-base-8bit", ids)                        # 与注册表的 qwen3-clone-1.7b 是同一个仓库：去重
+        b4 = catalog.find_model("local/qwen3-tts-0.6b-base-4bit")                      # Base（克隆）走克隆引擎
+        self.assertEqual((b4["engine"], b4["caps"]["clone"], b4["caps"]["voices"]), ("mlx-clone", True, False))
         self.assertEqual(sum(1 for m in r["models"] if m.get("repo", "").endswith("1.7B-CustomVoice-8bit")), 1)   # 与注册表的 qwen3 去重
         m = catalog.find_model("local/qwen3-tts-0.6b-customvoice-4bit")
         self.assertEqual((m["engine"], m["params_b"], m["quant"], m["size_gb"]), ("qwen3", 0.6, "MLX 4bit", 1.5))
@@ -731,12 +734,217 @@ class STTTest(unittest.TestCase):
         self.assertAlmostEqual(self.stt.estimate(m, 600)["amount"], 0.27 / 6, places=4)       # 10 分钟 = 0.045 美元
 
 
+class CloneTest(unittest.TestCase):
+    """克隆音色：录音规范化、预设改名与迁移、本地零样本、云端注册（注册一次反复用、改了录音重新注册）、收费确认、各家注册请求格式（全部离线）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from vox import clones
+        cls.clones = clones
+        cls.src, cls.short = TMP / "voice12.wav", TMP / "voice4.wav"
+        for f, d in ((cls.src, 12), (cls.short, 4)):
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"sine=frequency=220:duration={d}", str(f)], check=True)
+
+    def _clone(self, name, src=None, text="这是一段测试录音。"):
+        return hub.create_clone(src or self.src, name, text=text)
+
+    def _ref(self, c):
+        return {"id": c["id"], "name": c["name"], "audio": str(self.clones.sample_path(c)), "text": c["text"], "lang": None,
+                "duration": c["duration"], "consent": None}
+
+    def test_create_and_refs(self):
+        c = self._clone("我的声音")
+        self.assertEqual(c["id"], "我的声音")
+        self.assertAlmostEqual(c["duration"], 12, delta=0.3)
+        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=sample_rate,channels", "-of", "csv=p=0",
+                                str(self.clones.sample_path(c))], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(probe, "24000,1")                                         # 统一成 24 kHz 单声道
+        with self.assertRaises(hub.VoxError):
+            hub.create_clone(TMP / "tone.wav", "太短")                              # 0.3 秒，不够 3 秒
+        with self.assertRaises(hub.VoxError) as e:
+            hub.normalize({"model": "local/qwen3", "voice": "clone:我的声音", "input": "x"})
+        self.assertIn("qwen3-clone", str(e.exception))                              # 报错里列出支持克隆的模型
+        with self.assertRaises(hub.VoxError):
+            hub.normalize({"model": "local/qwen3-clone", "input": "x"})             # 克隆模型没有预置音色
+        self.assertEqual(hub.normalize({"model": "local/qwen3-clone", "voice": "clone:我的声音", "input": "x"})["voice"], "clone:我的声音")
+        self.assertEqual(hub.create_clone(self.src, "无稿")["text"], "")            # 没有本地识别模型：文字稿留空，不报错
+        hub.delete_clone("无稿")
+        hub.delete_clone("我的声音")
+        self.assertFalse(any(x["id"] == "我的声音" for x in self.clones.records()))
+
+    def test_preferred_model(self):
+        c = hub.create_clone(self.src, "首选", text="这是一段测试录音。", model="gemini/gemini-3.8-flash-tts")
+        self.assertEqual(c["model"], "gemini/gemini-3.8-flash-tts")
+        self.assertEqual(hub.normalize({"voice": "clone:首选", "input": "x"})["model"], "gemini/gemini-3.8-flash-tts")   # 不写模型：用首选模型
+        self.assertEqual(next(v for v in hub.voices(with_samples=False) if v["ref"] == "clone:首选")["model"], "gemini/gemini-3.8-flash-tts")
+        self.assertEqual(hub.normalize({"model": "elevenlabs/eleven_v3", "voice": "clone:首选", "input": "x"})["model"], "elevenlabs/eleven_v3")   # 换别的克隆模型照样能用
+        with self.assertRaises(hub.VoxError):
+            hub.update_clone("首选", model="local/kokoro")                         # 不支持克隆的模型不能设为首选
+        self.assertEqual(hub.update_clone("首选", model="elevenlabs/eleven_v3")["model"], "elevenlabs/eleven_v3")
+        self.assertEqual(catalog.find_model("gemini/gemini-3.8-flash-tts")["compat"]["clone"]["consent"]["zh"], "我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型")
+        hub.delete_clone("首选")
+
+    def test_presets_migrate(self):
+        from vox import paths
+        hub.PRESETS.unlink(missing_ok=True)
+        paths.MY_VOICES.write_text(json.dumps([{"id": "warm", "name": "温暖", "model": "local/qwen3", "voice": "serena", "instructions": "温柔"}]))
+        self.assertEqual(hub.presets()[0]["id"], "warm")
+        self.assertFalse(paths.MY_VOICES.exists())                                  # 旧文件原样搬到 presets.json
+        self.assertEqual(hub.resolve_voice("preset:warm")["voice"], "serena")
+        self.assertEqual(hub.resolve_voice("my:warm")["instructions"], "温柔")       # 旧写法 my: 仍然认
+        self.assertTrue(any(v["ref"] == "preset:warm" and v["kind"] == "preset" for v in hub.voices(with_samples=False)))
+        hub.delete_preset("warm")
+
+    def test_local_zero_shot_and_cache(self):
+        import numpy as np
+        self._clone("本地")
+        calls = []
+
+        class FakeClone:
+            native_speed = True
+
+            def synth(self, text, voice=None, instruct=None, speed=1.0, lang="chinese", seed=None, clone=None, **gen):
+                calls.append((voice, clone))
+                return np.zeros(2400, dtype="float32"), 24000
+
+        old = hub._engine
+        hub._engine = lambda m: FakeClone()
+        try:
+            req = {"model": "local/qwen3-clone", "voice": "clone:本地", "input": "你好", "seed": 1}
+            r1, r2 = hub.speak(dict(req)), hub.speak(dict(req))
+            hub.update_clone("本地", text="改过的文字稿。")
+            r3 = hub.speak(dict(req))
+        finally:
+            hub._engine = old
+        self.assertIsNone(calls[0][0])                                              # 本地引擎拿到的是录音，不是音色名
+        self.assertTrue(calls[0][1]["audio"].endswith("sample.wav"))
+        self.assertEqual(calls[0][1]["text"], "这是一段测试录音。")
+        self.assertTrue(r2.get("cached"))
+        self.assertNotEqual(r1["id"], r3["id"])                                     # 改了文字稿：同样的请求重新合成
+        self.assertEqual(len(calls), 2)
+        hub.delete_clone("本地")
+
+    def test_gemini_register_once(self):
+        self._clone("双子")
+        tts = {"candidates": [{"content": {"parts": [{"inlineData": {"data": base64.b64encode(WAV).decode()}}]}}]}
+        old = gemini.http
+        try:
+            gemini.http = Fake()
+            with self.assertRaises(hub.VoxError) as e:
+                hub.speak({"model": "gemini/gemini-3.8-flash-tts", "voice": "clone:双子", "input": "你好"}, record=False)
+            self.assertIn("我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型", str(e.exception))   # 没有同意声明：告诉用户要念什么
+            self.assertEqual(gemini.http.calls, [])
+            hub.update_clone("双子", consent=self.short)
+            f = gemini.http = Fake({"id": "voice_abc", "expire_time": "2027-10-04T00:00:00Z"}, tts, tts, tts)
+            hub.speak({"model": "gemini/gemini-3.8-flash-tts", "voice": "clone:双子", "input": "你好"}, record=False)
+            hub.speak({"model": "gemini/gemini-3.8-flash-tts", "voice": "clone:双子", "input": "再见"}, record=False)
+            hub.speak({"model": "gemini/gemini-3.8-flash-lite-tts", "voice": "clone:双子", "input": "你好"}, record=False)   # 同一家共用
+            create = f.calls[0]
+            self.assertEqual((create["method"], create["url"]), ("POST", "https://generativelanguage.googleapis.com/v1beta/voices"))
+            body = create["body"]
+            self.assertIs(body["store"], True)
+            self.assertEqual((body["voice"]["type"], body["voice"]["model"]), ("replicated", "gemini-3.8-flash-tts"))
+            rep = body["voice"]["replicated"]
+            self.assertEqual(rep["source_audio"]["mime_type"], "audio/wav")
+            self.assertTrue(base64.b64decode(rep["consent_audio"]["data"])[:4] == b"RIFF")
+            self.assertEqual(len(f.calls), 4)                                       # 注册 1 次 + 合成 3 次
+            self.assertTrue(all(c["body"]["generationConfig"]["speechConfig"]["voiceConfig"]["voice"] == "voice_abc" for c in f.calls[1:]))
+            self.assertEqual(self.clones.get("双子")["remote"]["gemini"]["voice"], "voice_abc")
+            f = gemini.http = Fake({})
+            r = hub.delete_clone("双子")
+            self.assertEqual((f.calls[0]["method"], f.calls[0]["url"]), ("DELETE", "https://generativelanguage.googleapis.com/v1beta/voices/voice_abc"))
+            self.assertEqual(r["remote_failed"], [])
+        finally:
+            gemini.http = old
+
+    def test_fee_and_length(self):
+        self._clone("短", src=self.short)
+        self._clone("长")
+        old = minimax.http
+        try:
+            minimax.http = Fake()
+            with self.assertRaises(hub.VoxError) as e:
+                hub.speak({"model": "minimax/speech-2.8-hd", "voice": "clone:短", "input": "你好", "accept_fee": True}, record=False)
+            self.assertIn("至少 10 秒", str(e.exception))
+            with self.assertRaises(hub.VoxError) as e:
+                hub.speak({"model": "minimax/speech-2.8-hd", "voice": "clone:长", "input": "你好"}, record=False)
+            self.assertIn("9.9 元", str(e.exception))                                # 收费的厂商：没确认就不上传
+            self.assertEqual(minimax.http.calls, [])
+            ok = {"base_resp": {"status_code": 0}}
+            f = minimax.http = Fake({"file": {"file_id": 123}, **ok}, ok, {"data": {"audio": MP3.hex()}, **ok})
+            hub.speak({"model": "minimax/speech-2.8-hd", "voice": "clone:长", "input": "你好", "accept_fee": True}, record=False)
+            up, cl, syn = f.calls
+            self.assertTrue(up["url"].endswith("/v1/files/upload"))
+            self.assertIn(b'name="purpose"\r\n\r\nvoice_clone', up["body"])
+            self.assertEqual(cl["body"]["file_id"], 123)
+            self.assertRegex(cl["body"]["voice_id"], r"^[A-Za-z][A-Za-z0-9]{7,}$")    # 字母开头、至少 8 位
+            self.assertEqual(syn["body"]["voice_setting"]["voice_id"], cl["body"]["voice_id"])
+        finally:
+            minimax.http = old
+        hub.delete_clone("短")
+        minimax.http, old = Fake({"base_resp": {"status_code": 0}}), minimax.http
+        try:
+            hub.delete_clone("长")
+            self.assertTrue(minimax.http.calls[0]["url"].endswith("/v1/delete_voice"))
+        finally:
+            minimax.http = old
+
+    def test_adapter_requests(self):
+        c = self._clone("格式")
+        ref = self._ref(c)
+
+        def call(mod, mid, *resp, fn="clone_create", arg=None):
+            f, old = Fake(*resp), mod.http
+            mod.http = f
+            try:
+                out = getattr(engine_for(catalog.find_model(mid)), fn)(arg or ref)
+            finally:
+                mod.http = old
+            return out, f.calls
+
+        out, (c1,) = call(elevenlabs, "elevenlabs/eleven_v3", {"voice_id": "el1"})
+        self.assertEqual((out["voice"], c1["url"], c1["headers"]["xi-api-key"]), ("el1", "https://api.elevenlabs.io/v1/voices/add", "el-test"))
+        self.assertIn(b'name="files"; filename="sample.mp3"', c1["body"])        # 官方建议 mp3
+
+        out, (c1,) = call(dashscope, "aliyun/qwen3-tts-vc-2026-01-22", {"output": {"voice": "qvc1"}})
+        inp = c1["body"]["input"]
+        self.assertEqual((c1["body"]["model"], inp["action"], inp["target_model"], out["voice"]), ("qwen-voice-enrollment", "create", "qwen3-tts-vc-2026-01-22", "qvc1"))
+        self.assertTrue(inp["audio"]["data"].startswith("data:audio/wav;base64,"))
+        self.assertRegex(inp["preferred_name"], r"^\w{1,16}$")
+        self.assertEqual(inp["text"], "这是一段测试录音。")
+
+        out, (c1,) = call(openai_compat, "siliconflow/cosyvoice2", {"uri": "speech:vox:abc"})
+        self.assertEqual((c1["url"], c1["body"]["model"], c1["body"]["text"], out["voice"]),
+                         ("https://api.siliconflow.cn/v1/uploads/audio/voice", "FunAudioLLM/CosyVoice2-0.5B", "这是一段测试录音。", "speech:vox:abc"))
+
+        out, (c1,) = call(openai_compat, "inworld/inworld-tts-2", {"voice": {"voiceId": "ws__v1"}})
+        self.assertEqual((c1["url"], c1["headers"]["Authorization"], out["voice"]),
+                         ("https://api.inworld.ai/voices/v1/voices:clone", "Basic aW53b3JsZDp0ZXN0", "ws__v1"))
+        self.assertEqual(c1["body"]["voiceSamples"][0]["transcription"], "这是一段测试录音。")
+
+        out, (c1, c2) = call(openai_compat, "stepfun/stepaudio-2.5-tts", {"id": "file-1"}, {"id": "voice-tone-1"})
+        self.assertIn(b'name="purpose"\r\n\r\nstorage', c1["body"])
+        self.assertEqual((c2["url"], c2["body"]["file_id"], c2["body"]["model"], out["voice"]),
+                         ("https://api.stepfun.com/v1/audio/voices", "file-1", "stepaudio-2.5-tts", "voice-tone-1"))
+        self.assertNotIn("text", c2["body"])                                        # 12 秒截到 10 秒：文字稿对不上了，不传
+
+        m = catalog.find_model("mimo/mimo-v2.5-tts-voiceclone")                     # 零样本：每次合成都带上录音
+        f, old = Fake({"choices": [{"message": {"audio": {"data": base64.b64encode(WAV).decode()}}}]}), mimo.http
+        mimo.http = f
+        try:
+            engine_for(m).synth({"model": m["id"], "input": "你好", "voice": "clone:格式", "_clone": ref})
+        finally:
+            mimo.http = old
+        self.assertTrue(f.calls[0]["body"]["audio"]["voice"].startswith("data:audio/wav;base64,"))
+        hub.delete_clone("格式")
+
+
 class CacheTest(unittest.TestCase):
     """同样的请求命中缓存；cache=False 重新合成。不支持种子的模型得到新的一条，旧的保留。"""
 
     def setUp(self):
         self.calls, self._old = [], hub._render
-        def render(req, out):
+        def render(req, out, **kw):
             self.calls.append(req); out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(WAV); return 0.3
         hub._render = render
 

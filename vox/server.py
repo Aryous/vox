@@ -19,9 +19,9 @@ import traceback
 from email.parser import BytesParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-from . import audio, catalog, hub, paths, stt
+from . import audio, catalog, clones, hub, paths, stt
 
 WEB = Path(__file__).parent / "web"
 MAX_UPLOAD = 1 << 30   # 上传的音频 / 视频最大 1 GB（整个读进内存；更长的录音先切段或压缩）
@@ -40,7 +40,8 @@ def llms_txt(base: str) -> str:
 ## 合成（OpenAI 兼容）
 POST {base}v1/audio/speech
 {{"model": "local/qwen3", "input": "你好", "voice": "serena", "instructions": "轻快友好", "speed": 1.0, "response_format": "mp3"}}
-扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用，如 "qwen3:serena" 或 "my:<id>"。
+扩展参数：seed（可复现）、lang、temperature、top_p、top_k、repetition_penalty；cache=false 跳过缓存重新合成（同样的请求默认直接返回上次的结果）。voice 也可写音色引用：预置音色 "qwen3:serena"、我的预设 "preset:<id>"、克隆音色 "clone:<id>"（要用支持克隆的模型；不写 model 时用默认的克隆模型）。
+第一次在会收费的云端（如 MiniMax）用克隆音色会被拒绝并说明费用，确认后加 "accept_fee": true 重发。
 返回音频字节；响应头 X-Vox-Id、X-Vox-Seed、X-Vox-Duration。
 
 ## 识别（OpenAI 兼容）
@@ -60,7 +61,10 @@ GET  /api/voices?model=&lang=&gender=&q=   音色库
 POST /api/voices/sample {{"ref": "qwen3:serena"}}   生成 / 取音色样本
 POST /api/speech {{同 /v1/audio/speech}}   返回 JSON：id、request（含实际种子）、dur、url
 GET  /api/history?limit=&star=   POST /api/history/update {{"id","star"|"delete"}}   POST /api/asr {{"id"}}
-GET/POST /api/my-voices          自定义音色；POST /api/my-voices/delete {{"id"}}
+GET/POST /api/presets            我的预设（音色 + 语气 + 语速 + 种子）；POST /api/presets/delete {{"id"}}
+GET  /api/clones                 克隆音色；GET /clones/<id>/sample.wav 原始录音
+POST /api/clones                 multipart：file（参考录音，10–20 秒、一个人）+ name / model（首选模型）/ text（文字稿，留空自动识别）/ lang / consent（同意声明录音，部分云端需要）
+POST /api/clones/update {{"id","name"?,"text"?,"model"?}}；POST /api/clones/consent（multipart：id + consent）；POST /api/clones/delete {{"id"}}（顺带删除云端注册的音色）
 GET  /api/status                 服务状态、已加载模型、内存
 GET  /api/providers              Provider 与连接状态；POST /api/keys {{"env","value"}} 保存凭证（不会回显）
 GET  /api/registry | POST /api/registry/update   模型注册表版本 / 拉取新版
@@ -88,6 +92,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")  # 方便本机其他页面 / 工具调用
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Expose-Headers", "X-Vox-Id, X-Vox-Seed, X-Vox-Duration")
+        if getattr(self, "_static", False):   # 网页文件：每次先问服务端（没变就回 304），升级后不会继续用浏览器缓存里的旧版
+            self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -149,7 +155,7 @@ class Handler(SimpleHTTPRequestHandler):
         if p == "/v1/audio/voices":   # 扩展：音色列表（与 Kokoro-FastAPI 等服务同一写法），别的 vox 或工具可以把 vox 当 Provider 接入
             return self._run(lambda: {"voices": [{"id": v["voice"] if q.get("model") else v["ref"], "name": v["name"], "gender": v["gender"],
                                                   "lang": v["lang"], "description": v["description"]}
-                                                 for v in hub.voices(model=q.get("model"), with_samples=False) if v["kind"] == "preset"]}, openai=True)
+                                                 for v in hub.voices(model=q.get("model"), with_samples=False) if v["kind"] == "builtin"]}, openai=True)
         if p == "/v1/models":
             return self._run(lambda: {"object": "list", "data": [
                 {"id": m["id"], "object": "model", "created": 0, "owned_by": m["provider"], "status": m["status"]} for m in hub.models(mine=True)]}, openai=True)
@@ -161,7 +167,8 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/models/pull": lambda: hub.pull_status(q.get("model", "")),
             "/api/voices": lambda: hub.voices(model=q.get("model"), lang=q.get("lang"), gender=q.get("gender"), q=q.get("q")),
             "/api/history": lambda: hub.history(int(q["limit"]) if q.get("limit") else None, {"1": True, "0": False}.get(q.get("star", ""))),
-            "/api/my-voices": hub.my_voices,
+            "/api/presets": hub.presets,
+            "/api/clones": lambda: [{**c, "sample": f"/clones/{c['id']}/sample.wav"} for c in clones.records()],
             "/api/settings": hub.settings,
             "/api/catalog": lambda: {"instructions": catalog.INSTRUCTION_EXAMPLES, "design": catalog.DESIGN_EXAMPLES},
             "/api/providers": hub.provider_list,
@@ -171,6 +178,10 @@ class Handler(SimpleHTTPRequestHandler):
         m = re.fullmatch(r"/api/transcripts/([0-9a-f]{16})", p)
         if m:
             return self._run(lambda: self._transcript(m[1], q.get("format", "json"), bool(q.get("download"))))
+        m = re.fullmatch(r"/clones/([\w\u4e00-\u9fff-]{1,64})/sample\.wav", unquote(p))
+        if m:
+            f = clones.DIR / m[1] / "sample.wav"
+            return self._file(f, "audio/wav", cache=False) if f.exists() else self.send_error(404)   # 同一个 ID 可以重录，不能长缓存
         m = re.fullmatch(r"/(clips|samples)/([0-9a-f]{16})\.(wav|mp3|flac|opus|aac)", p)
         if m:
             f = (hub.CLIPS if m[1] == "clips" else hub.SAMPLES) / f"{m[2]}.wav"
@@ -180,6 +191,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._file(f, audio.FORMATS[m[3]], {"Content-Disposition": f'inline; filename="vox-{m[2]}.{m[3]}"'})
         if p in ("/voices", "/playground", "/transcribe", "/models", "/providers", "/api-docs") or p.startswith("/models/"):
             self.path = "/index.html"
+        self._static = True
         return super().do_GET()
 
     def do_POST(self):
@@ -188,6 +200,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self._run(self._openai_speech, openai=True)
         if p == "/v1/audio/transcriptions":
             return self._run(self._openai_transcribe, openai=True)
+        if p == "/api/clones":   # 新建克隆音色：file = 参考录音，consent = 同意声明录音（可选），name / text / lang
+            return self._run(self._clone_upload)
+        if p == "/api/clones/consent":   # 给已有的克隆音色补交同意声明录音：id + consent
+            return self._run(self._clone_consent)
         if p == "/api/transcribe":
             return self._run(lambda: self._upload(lambda f, fn, form: stt.transcribe(f, {
                 **{k: form.get(k) for k in ("model", "language", "prompt", "hotwords", "words", "diarize")},
@@ -200,8 +216,10 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/voices/sample": lambda b: hub.sample(b.get("ref", "")),
             "/api/history/update": lambda b: (hub.update_history(b.get("id", ""), b.get("star"), bool(b.get("delete"))), {"ok": True})[1],
             "/api/asr": lambda b: {"id": b.get("id"), "text": hub.asr(b.get("id", ""))},
-            "/api/my-voices": lambda b: hub.save_my_voice(b.get("name", "").strip() or "未命名音色", b.get("request", {}), b.get("id")),
-            "/api/my-voices/delete": lambda b: (hub.delete_my_voice(b.get("id", "")), {"ok": True})[1],
+            "/api/presets": lambda b: hub.save_preset(b.get("name", "").strip() or "未命名预设", b.get("request", {}), b.get("id")),
+            "/api/presets/delete": lambda b: (hub.delete_preset(b.get("id", "")), {"ok": True})[1],
+            "/api/clones/update": lambda b: hub.update_clone(b.get("id", ""), b.get("name"), b.get("text"), model=b.get("model") or None),
+            "/api/clones/delete": lambda b: hub.delete_clone(b.get("id", "")),
             "/api/settings": lambda b: hub.set_settings(sample_text=b.get("sample_text"), favorites=b.get("favorites")),
             "/api/keys": lambda b: hub.set_key(b.get("env", ""), b.get("value", "")),
             "/api/keys/delete": lambda b: hub.delete_key(b.get("env", "")),
@@ -254,6 +272,33 @@ class Handler(SimpleHTTPRequestHandler):
             f = Path(d) / ("upload" + Path(name or "").suffix.lower()[:8])
             f.write_bytes(data)
             return fn(f, Path(name or "upload").name, form)
+
+    def _clone_upload(self):
+        form, files = self._form()
+        if "file" not in files:
+            raise hub.VoxError("缺少 file 字段（参考录音）")
+        with tempfile.TemporaryDirectory(prefix="vox-clone-") as d:
+            def keep(key):
+                if key not in files:
+                    return None
+                name, data = files[key]
+                f = Path(d) / (key + Path(name or "").suffix.lower()[:8])
+                f.write_bytes(data)
+                return f
+            src, consent = keep("file"), keep("consent")
+            return hub.create_clone(src, form.get("name") or "", text=form.get("text"), lang=form.get("lang") or None, consent=consent,
+                                    filename=Path(files["file"][0] or "upload").name, cid=form.get("id") or None, model=form.get("model") or None)
+
+    def _clone_consent(self):
+        form, files = self._form()
+        key = "consent" if "consent" in files else "file"
+        if key not in files:
+            raise hub.VoxError("缺少 consent 字段（同意声明录音）")
+        name, data = files[key]
+        with tempfile.TemporaryDirectory(prefix="vox-clone-") as d:
+            f = Path(d) / ("consent" + Path(name or "").suffix.lower()[:8])
+            f.write_bytes(data)
+            return hub.update_clone(form.get("id", ""), consent=f)
 
     def _openai_transcribe(self):
         def run(f, name, form):

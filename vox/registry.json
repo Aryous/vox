@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-10-03",
+ "updated": "2026-10-04",
  "about": "vox 模型注册表：Provider 的连接与适配器配置、已核对的模型元数据（能力、价格、音色）。这是数据，不是代码；新模型优先来自各家的在线列表，注册表只补接口给不了的信息，并作为离线兜底。字段说明见 vox/catalog.py。",
  "providers": {
   "local": {
@@ -21,9 +21,13 @@
      {
       "match": "VoiceDesign",
       "template": "local/qwen3-design"
+     },
+     {
+      "match": "Base",
+      "template": "local/qwen3-clone"
      }
     ],
-    "note": "只列出 vox 引擎能直接运行的模型；Base（声音克隆）等暂不支持。"
+    "note": "只列出 vox 引擎能直接运行的模型：CustomVoice（预置音色）、VoiceDesign（设计声音）、Base（克隆）。"
    }
   },
   "openrouter": {
@@ -164,6 +168,10 @@
     "list_voices": {
      "url": "https://api.inworld.ai/voices/v1/voices?pageSize=200&filter=source=\"SYSTEM\"",
      "kind": "inworld"
+    },
+    "clone": {
+     "mode": "voice",
+     "kind": "inworld"
     }
    },
    "model_defaults": {
@@ -197,6 +205,11 @@
    },
    "discover": {
     "kind": "elevenlabs"
+   },
+   "compat": {
+    "clone": {
+     "mode": "voice"
+    }
    }
   },
   "gemini": {
@@ -221,6 +234,15 @@
    },
    "discover": {
     "kind": "gemini"
+   },
+   "compat": {
+    "clone": {
+     "mode": "voice",
+     "consent": {
+      "zh": "我是此声音的拥有者并授权谷歌使用此声音创建语音合成模型",
+      "en": "I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model."
+     }
+    }
    }
   },
   "aliyun": {
@@ -305,6 +327,13 @@
     "license": "商用 API",
     "default_voice": "female-shaonv",
     "family": "MiniMax"
+   },
+   "compat": {
+    "clone": {
+     "mode": "voice",
+     "fee": "9.9 元/音色，首次用它合成时扣",
+     "min_sec": 10
+    }
    }
   },
   "stepfun": {
@@ -496,7 +525,10 @@
    "about": "9 个官方预置音色（含北京话、四川话），可用一句话控制语气和情绪。中文最自然。",
    "recommended": true,
    "repo_env": "VOX_QWEN_MODEL",
-   "voices": "@qwen3-local"
+   "voices": "@qwen3-local",
+   "tags": [
+    "开源首选"
+   ]
   },
   {
    "id": "local/qwen3-design",
@@ -544,6 +576,160 @@
    "about": "没有预置音色：用一句话描述想要的声音（年龄、性别、音色、语气），模型现场设计。",
    "recommended": true,
    "repo_env": "VOX_QWEN_DESIGN_MODEL"
+  },
+  {
+   "id": "local/qwen3-clone",
+   "alias": "qwen3-clone",
+   "provider": "local",
+   "engine": "mlx-clone",
+   "name": "Qwen3-TTS Base 0.6B · 8bit（克隆）",
+   "family": "Qwen3-TTS",
+   "params_b": 0.6,
+   "quant": "MLX 8bit",
+   "size_gb": 1.99,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "韩语",
+    "德语",
+    "法语",
+    "俄语",
+    "葡萄牙语",
+    "西班牙语",
+    "意大利语"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": false,
+    "design": false,
+    "clone": true,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty"
+   ],
+   "about": "通义千问的克隆版：给一段几秒到几十秒的录音和它的文字稿，就能用这个声音说任何话。体积小，适合先试。",
+   "tags": [
+    "开源首选"
+   ]
+  },
+  {
+   "id": "local/qwen3-clone-1.7b",
+   "provider": "local",
+   "engine": "mlx-clone",
+   "name": "Qwen3-TTS Base 1.7B · 8bit（克隆）",
+   "family": "Qwen3-TTS",
+   "params_b": 1.7,
+   "quant": "MLX 8bit",
+   "size_gb": 3.1,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+   "homepage": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "韩语",
+    "德语",
+    "法语",
+    "俄语",
+    "葡萄牙语",
+    "西班牙语",
+    "意大利语"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": false,
+    "design": false,
+    "clone": true,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty"
+   ],
+   "about": "同上的大尺寸，更像、更慢、更占内存。"
+  },
+  {
+   "id": "local/voxcpm2",
+   "alias": "voxcpm2",
+   "provider": "local",
+   "engine": "mlx-clone",
+   "name": "VoxCPM2 · 8bit（克隆）",
+   "family": "VoxCPM",
+   "quant": "MLX 8bit",
+   "size_gb": 3.23,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/VoxCPM2-8bit",
+   "homepage": "https://huggingface.co/openbmb/VoxCPM2",
+   "languages": [
+    "中文",
+    "英语",
+    "日语",
+    "韩语",
+    "多语言"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": false,
+    "design": false,
+    "clone": true,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed"
+   ],
+   "about": "面壁智能开源，主打中文和方言。只给录音也能克隆，有文字稿更像。"
+  },
+  {
+   "id": "local/omnivoice",
+   "alias": "omnivoice",
+   "provider": "local",
+   "engine": "mlx-clone",
+   "name": "OmniVoice（克隆）",
+   "family": "OmniVoice",
+   "quant": "MLX bf16",
+   "size_gb": 1.64,
+   "license": "Apache-2.0",
+   "repo": "mlx-community/OmniVoice-bf16",
+   "homepage": "https://huggingface.co/k2-fsa/OmniVoice",
+   "languages": [
+    "多语言"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": false,
+    "design": false,
+    "clone": true,
+    "seed": true,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "seed"
+   ],
+   "about": "k2-fsa（新一代 Kaldi）开源，体积最小、语种最多。参考录音只用前 10 秒。"
   },
   {
    "id": "local/kokoro",
@@ -611,7 +797,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -653,7 +840,8 @@
     "instructions": false,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "recommended": true
   },
@@ -669,7 +857,8 @@
     "instructions": true,
     "design": false,
     "seed": true,
-    "native_speed": false
+    "native_speed": false,
+    "clone": true
    },
    "params": [
     "voice",
@@ -686,7 +875,10 @@
     "unit": "char"
    },
    "about": "表现力最强的一档。instructions 会变成音频标签（如 [whispers]），支持 seed。配好 Key 后自动拉取官方音色。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "elevenlabs",
@@ -700,7 +892,8 @@
     "instructions": false,
     "design": false,
     "seed": true,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -716,7 +909,10 @@
     "unit": "char"
    },
    "about": "低延迟（约 75ms），原生语速 0.7–1.2。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ]
   },
   {
    "provider": "elevenlabs",
@@ -730,7 +926,8 @@
     "instructions": false,
     "design": false,
     "seed": true,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -760,7 +957,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": false
+    "native_speed": false,
+    "clone": true
    },
    "params": [
     "voice",
@@ -773,7 +971,10 @@
     "unit": "token"
    },
    "about": "2026-09-22 发布。instructions 作为风格描述（speech_metadata.style），文本里可用 <laugh> 等标签。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "gemini",
@@ -787,7 +988,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": false
+    "native_speed": false,
+    "clone": true
    },
    "params": [
     "voice",
@@ -800,7 +1002,10 @@
     "unit": "token"
    },
    "about": "更便宜的一档，官方明确支持普通话和粤语。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ]
   },
   {
    "provider": "aliyun",
@@ -838,7 +1043,10 @@
     "带着笑意，语气轻快"
    ],
    "about": "2026-07 发布。instruction 自然语言控制，文本里还能用 [whispers] [laughing] 等标签；支持 seed。另有 500+ 基础音色（ID 形如 qwen-audio-3.0-tts-plus-xxx）。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "aliyun",
@@ -878,7 +1086,10 @@
     "请用粤语表达。"
    ],
    "about": "系统音色的指令只接受固定格式：「你说话的情感是<情感>。」或「请用<方言>表达。」（带句号）。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ]
   },
   {
    "provider": "aliyun",
@@ -952,7 +1163,42 @@
     "unit": "char"
    },
    "about": "49 个音色，含上海话、北京话、四川话、粤语等方言；不支持指令。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ]
+  },
+  {
+   "provider": "aliyun",
+   "dashscope_group": "B",
+   "remote": "qwen3-tts-vc-2026-01-22",
+   "name": "Qwen3-TTS VC（云端克隆）",
+   "languages": [
+    "中文",
+    "英语",
+    "多语言"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": false,
+    "design": false,
+    "clone": true,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "speed",
+    "lang"
+   ],
+   "compat": {
+    "clone": {
+     "mode": "voice",
+     "per_model": true,
+     "fee": "0.01 元/个"
+    }
+   },
+   "about": "通义千问云端克隆版：上传 10–20 秒录音得到专属音色，只能在这个模型上用。"
   },
   {
    "provider": "volcengine",
@@ -983,7 +1229,10 @@
     "像在哄小孩睡觉一样轻声说"
    ],
    "about": "中文自然度第一梯队。instructions 作为「上文」（context_texts）引导语气，写成一句请求效果最好。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "minimax",
@@ -994,7 +1243,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -1019,7 +1269,10 @@
    ],
    "instr_enum": true,
    "about": "情绪只能选枚举（开心 / 伤心 / 生气 / 害怕 / 厌恶 / 惊讶 / 平静）；文本里可写 (laughs)(sighs) 等语气词、<#0.5#> 停顿。配好 Key 后拉取 300+ 系统音色。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "minimax",
@@ -1030,7 +1283,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -1055,7 +1309,10 @@
    ],
    "instr_enum": true,
    "about": "更快更便宜的一档，能力同 HD。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ]
   },
   {
    "provider": "stepfun",
@@ -1092,7 +1349,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -1107,7 +1365,16 @@
     "unit": "char"
    },
    "about": "上一代表现力模型，instruction ≤200 字。",
-   "recommended": true
+   "recommended": true,
+   "compat": {
+    "clone": {
+     "mode": "voice",
+     "kind": "stepfun",
+     "per_model": true,
+     "fee": "9.9 元/音色，复刻成功即扣",
+     "min_sec": 5
+    }
+   }
   },
   {
    "provider": "siliconflow",
@@ -1120,7 +1387,8 @@
     "instructions": true,
     "design": false,
     "seed": false,
-    "native_speed": true
+    "native_speed": true,
+    "clone": true
    },
    "params": [
     "voice",
@@ -1135,7 +1403,17 @@
     "unit": "byte"
    },
    "about": "托管开源 CosyVoice2。指令写进正文（vox 自动拼成「指令<|endofprompt|>正文」），支持 [laughter] 等标签。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "性价比"
+   ],
+   "compat": {
+    "clone": {
+     "mode": "voice",
+     "kind": "siliconflow",
+     "per_model": true
+    }
+   }
   },
   {
    "provider": "mimo",
@@ -1165,7 +1443,45 @@
     "unit": "token"
    },
    "about": "风格指令用自然语言写；文本里可用（开心）[叹气] 等标签，句首加（唱歌）还能唱。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "免费"
+   ]
+  },
+  {
+   "provider": "mimo",
+   "remote": "mimo-v2.5-tts-voiceclone",
+   "name": "MiMo V2.5 克隆",
+   "languages": [
+    "中文",
+    "英语"
+   ],
+   "caps": {
+    "voices": false,
+    "instructions": true,
+    "design": false,
+    "clone": true,
+    "seed": false,
+    "native_speed": false
+   },
+   "params": [
+    "voice",
+    "instructions",
+    "speed"
+   ],
+   "compat": {
+    "clone": {
+     "mode": "inline"
+    }
+   },
+   "price": {
+    "text": "限时免费",
+    "unit": "token"
+   },
+   "tags": [
+    "免费"
+   ],
+   "about": "每次合成都带上参考录音，不在小米那边留存音色；风格指令照常可用。"
   },
   {
    "provider": "mimo",
@@ -1192,7 +1508,10 @@
     "unit": "token"
    },
    "about": "没有预置音色：用一句话描述声音，模型现场设计。",
-   "recommended": true
+   "recommended": true,
+   "tags": [
+    "免费"
+   ]
   }
  ],
  "voice_sets": {
@@ -2866,7 +3185,10 @@
     "prompt": true,
     "hotwords": true
    },
-   "about": "通义千问开源的识别模型，中英兼顾，支持 22 种中文方言和热词。整段文本，暂无分句时间戳。"
+   "about": "通义千问开源的识别模型，中英兼顾，支持 22 种中文方言和热词。整段文本，暂无分句时间戳。",
+   "tags": [
+    "开源首选"
+   ]
   },
   {
    "id": "local/qwen3-asr-1.7b",
@@ -2922,7 +3244,10 @@
     "hotwords": "热词提示：{}"
    },
    "tokens_per_sec": 20,
-   "about": "复旦 OpenMOSS 开源，一次给出文字、说话人（S01、S02…）和分句时间戳，单个文件最长 90 分钟，适合会议、访谈、问诊。比 Qwen3-ASR 慢（17 分钟录音约 6 分钟）；对话很快、抢话时说话人可能分错。MLX 版为社区转换（vanch007）。"
+   "about": "复旦 OpenMOSS 开源，一次给出文字、说话人（S01、S02…）和分句时间戳，单个文件最长 90 分钟，适合会议、访谈、问诊。比 Qwen3-ASR 慢（17 分钟录音约 6 分钟）；对话很快、抢话时说话人可能分错。MLX 版为社区转换（vanch007）。",
+   "tags": [
+    "开源首选"
+   ]
   },
   {
    "id": "local/sensevoice",
@@ -3006,7 +3331,10 @@
     "unit": "minute"
    },
    "recommended": true,
-   "about": "OpenAI 当前推荐的转写模型。只返回文本，没有时间戳。"
+   "about": "OpenAI 当前推荐的转写模型。只返回文本，没有时间戳。",
+   "tags": [
+    "第一梯队"
+   ]
   },
   {
    "provider": "openai",
@@ -3063,7 +3391,10 @@
     "unit": "minute"
    },
    "recommended": true,
-   "about": "免费。只返回文本。"
+   "about": "免费。只返回文本。",
+   "tags": [
+    "免费"
+   ]
   }
  ]
 }

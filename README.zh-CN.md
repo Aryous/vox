@@ -17,6 +17,7 @@
 - **云端 Provider，同一套接口。** OpenRouter 加 10 家厂商（见下表）。各家的差异，比如情绪指令放哪、语速范围、音频是 base64 / hex / 临时链接 / 分块返回，都由适配器处理。
 - **自定义 Provider。** 接入任何 OpenAI 兼容的语音服务：自己部署的 Kokoro-FastAPI、代理、vox 还没收录的厂商，或者另一台 vox。
 - **语音识别，同一套模型体系。** `vox transcribe 会议.m4a` 把音频或视频转成文字或字幕（txt / srt / vtt / json），可以用本地模型（Qwen3-ASR、MOSS-Transcribe-Diarize、SenseVoice、Fun-ASR、Whisper，都跑在 MLX 上），也可以用云端模型；有 OpenAI 兼容的 `POST /v1/audio/transcriptions`。网页上有「转写」页：拖进文件、选模型和热词，结果按说话人分色显示，刚上传的文件可以点句子跳到对应位置播放，可复制或导出字幕；没有识别模型时，页面里直接下载并显示进度。模型支持时还能区分说话人、给出逐词时间戳；本地的 MOSS 能一次分出说话人和分句时间，适合会议、访谈、问诊录音。
+- **克隆音色。** 上传或直接录一段 10–20 秒的声音，就能用这个声音说任何话：`vox clones add 录音.m4a -n 我的声音`，之后 `vox say "你好" -v clone:我的声音`。录音的文字稿由本地识别自动生成。同一个克隆音色可以给本地模型（Qwen3-TTS Base、VoxCPM2、OmniVoice）用，也可以给云端模型（Gemini、ElevenLabs、MiniMax……）用：用云端时，vox 第一次替你上传，记下对方的音色 ID 之后复用；收费的厂商会先说明费用、等你确认。
 - **先听再选。** 音色库里每个音色都读同一段样本；试音台有对比模式：同一段文本、同一组语气 / 语速 / 种子，几个音色或模型排成清单，一键同时生成（先给费用预估）；想单独调其中一个，就基于它做变体，和原来的并排比较。
 
 | 音色库 | 模型与 Provider |
@@ -44,7 +45,7 @@ vox serve --open            # 网页界面：http://127.0.0.1:8765
 ```bash
 git clone https://github.com/Aryous/vox && cd vox
 uv venv --python 3.12 && uv pip install -e .
-.venv/bin/python tests/test_providers.py     # 48 项离线测试，约 1 秒
+.venv/bin/python tests/test_providers.py     # 54 项离线测试，约 2 秒
 ```
 
 ## 快速上手
@@ -58,6 +59,9 @@ vox voices -m qwen3                       # 某个模型的音色
 vox models add qwen3-asr                  # 本地语音识别（Qwen3-ASR 0.6B，约 1 GB）
 vox models add moss                       # 本地识别并区分说话人（MOSS-Transcribe-Diarize 0.9B，约 1.3 GB）
 vox transcribe 会议.m4a -o 会议.txt        # 音频 / 视频 → 文字；-o 访谈.srt 导出字幕（需要带时间戳的模型）
+vox models add qwen3-clone                # 本地声音克隆（Qwen3-TTS Base 0.6B，约 2 GB）
+vox clones add 录音.m4a -n 我的声音        # 克隆一个声音（10–20 秒、一个人、没有背景音乐）
+vox say "用我的声音说一句。" -v clone:我的声音
 vox serve --open                          # 网页界面 + API
 ```
 
@@ -85,6 +89,7 @@ with client.audio.speech.with_streaming_response.create(
 | 来源 | 模型 | 状态 |
 | --- | --- | --- |
 | 本地 | Qwen3-TTS CustomVoice / VoiceDesign（0.6B–1.7B，4bit 到 bf16）、Kokoro-82M 中文 | ✅ 已测试 |
+| 本地克隆 | Qwen3-TTS Base 0.6B、VoxCPM2、OmniVoice | ✅ 已测试 |
 | OpenRouter | 它的全部 TTS 模型（Fish Audio、MAI-Voice、Grok Voice、Deepgram Aura……），在线获取，不用 Key 也能浏览 | 模型列表 ✅ · 合成 ⚠️ |
 | Google Gemini | `gemini-3.8-flash-tts`、`gemini-3.8-flash-lite-tts` | ✅ 用真 Key 测试过 |
 | OpenAI、Inworld、ElevenLabs | `gpt-4o-mini-tts`、`inworld-tts-2(-flash)`、`eleven_v3` / `flash_v2_5` / `multilingual_v2` | ⚠️ 实验性 |
@@ -104,6 +109,20 @@ with client.audio.speech.with_streaming_response.create(
 | 自定义 | 任何 OpenAI 兼容的转写服务 | ✅ 用本地模拟服务测试过 |
 
 云端识别的「实验性」：按官方文档实现、有离线测试，还没用真 Key 跑过。
+
+声音克隆（模型页标着「声音克隆」的）：
+
+| 来源 | 模型 | 状态 |
+| --- | --- | --- |
+| 本地 | Qwen3-TTS Base 0.6B、VoxCPM2、OmniVoice | ✅ 已测试（每次合成带上参考录音，不需要训练） |
+| 本地 | Qwen3-TTS Base 1.7B | ⚠️ 已登记，还没实测 |
+| Google Gemini | 3.8 Flash TTS / Flash Lite TTS | ⚠️ 实验性（要求本人朗读一句同意声明） |
+| ElevenLabs、Inworld | 全部合成模型 | ⚠️ 实验性 |
+| 阿里云百炼 | Qwen3-TTS VC（0.01 元/个） | ⚠️ 实验性 |
+| MiniMax、阶跃星辰 | Speech 2.8、StepAudio 2.5（9.9 元/音色，使用前先确认费用） | ⚠️ 实验性 |
+| 硅基流动、小米 MiMo | CosyVoice2、MiMo V2.5 克隆（每次带上录音） | ⚠️ 实验性 |
+
+火山豆包的声音复刻需要先在控制台购买音色槽位，vox 暂不支持。云端克隆按各家官方文档实现、有离线测试，还没用真 Key 跑过。
 
 有公开模型列表的 Provider，可以用 `vox models fetch <provider>`（或网页上的「在线查询」）获取最新列表。vox 注册表里没有的模型，会借用同一家已登记模型的请求格式，并标记为「能力推断」。
 
@@ -131,7 +150,7 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 | | 命令行 | HTTP | 例子 |
 | --- | --- | --- | --- |
 | 模型 | `-m` | `model` | `local/qwen3`、`qwen3`、`gemini/gemini-3.8-flash-tts` |
-| 音色 | `-v` | `voice` | `serena`，或带上模型的引用：`qwen3:serena`、`my:<id>` |
+| 音色 | `-v` | `voice` | `serena`；或引用：预置音色 `qwen3:serena`、我的预设 `preset:<id>`、克隆音色 `clone:<id>` |
 | 情绪 / 声音描述 | `-i` | `instructions` | `"轻快友好"`；声音设计模型里是对声音的描述 |
 | 语速 | `-s` | `speed` | `0.25`–`4` |
 | 种子 | `--seed` | `seed` | 支持的模型可以复现同一版声音 |
@@ -148,7 +167,9 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 | `vox pull <模型>` | 前台下载本地模型 |
 | `vox load / unload <模型>` | 预加载进运行中的服务 / 从内存卸载 |
 | `vox voices` · `vox sample <引用> --play` | 浏览音色 · 试听音色样本 |
-| `vox say <文本>` | 合成（`-` 从标准输入读；`-o 文件.mp3`；`--play`） |
+| `vox say <文本>` | 合成（`-` 从标准输入读；`-o 文件.mp3`；`--play`；`--accept-fee` 同意云端克隆的费用） |
+| `vox clones [add\|edit\|rm]` | 克隆音色：新建（`-n` 名字、`-m` 首选模型、`--text` 文字稿、`--consent` 同意声明录音）· 改名或改文字稿 · 删除（顺带删云端注册的） |
+| `vox presets [rm]` | 我的预设（音色 + 语气 + 语速 + 种子的组合，在网页试音台保存） |
 | `vox batch script.json` | 多角色脚本批量合成，只重做改动过的句子 |
 | `vox transcribe <文件…>` | 语音识别（`-m`、`-l zh`、`--hotwords`、`--diarize`、`--words`、`-f txt\|srt\|vtt\|json`、`-o`） |
 | `vox transcripts [show\|rm]` | 转写记录，与网页共享 |
@@ -165,7 +186,8 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
   "defaults": {"model": "qwen3"},
   "voices": {
     "N": {"voice": "uncle_fu", "instructions": "沉稳的纪录片旁白"},
-    "C": {"voice": "my:narrator"},
+    "C": {"voice": "preset:narrator"},
+    "D": {"voice": "clone:我的声音"},
     "L": {"model": "kokoro", "voice": "zm_010", "speed": 1.1}
   },
   "lines": [
@@ -181,7 +203,7 @@ vox 调用 `POST {base}/audio/speech`，从 `GET {base}/models` 读模型列表�
 
 | | 位置 | 内容 |
 | --- | --- | --- |
-| 数据 | `~/.vox` | 合成结果、转写记录、音色样本、历史、我的音色、设置、我的模型、自定义 Provider |
+| 数据 | `~/.vox` | 合成结果、转写记录、音色样本、克隆音色（录音和文字稿）、历史、我的预设、设置、我的模型、自定义 Provider |
 | 模型 | `~/.vox/models` | 本地模型文件（已排除出 Time Machine，能重新下载） |
 | 缓存 | `~/Library/Caches/vox`（其他系统为 `~/.cache/vox`） | 在线模型列表、云端音色列表、新版注册表，删了会自动重新获取 |
 | Key | `~/.config/vox/credentials.json` | 权限 600；环境变量优先 |

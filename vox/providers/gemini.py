@@ -6,16 +6,25 @@
   音频 → candidates[0].content.parts[0].inlineData.data（base64）
 3.8 非流式默认返回带头 WAV（24 kHz / 单声道 / 16-bit），显式要求 AUDIO_WAV。
 没有 speed / seed 参数：speed 交给 ffmpeg，seed 忽略。
+
+声音复刻（Voice replication，https://ai.google.dev/gemini-api/docs/voice-replication）：
+  POST /v1beta/voices，参考录音和「同意声明」录音都以 base64 内联在同一个请求里（不收 URL、不走 Files API）。
+  同意声明：声音的主人本人逐字朗读一句规定的话（CONSENT），和参考录音最好同一支麦克风、同一环境。
+  store=true 得到 voice_…（项目里最多 200 个，最后一次使用后 1 年过期）；文档对 store 默认值前后矛盾，所以显式传。
+  合成时把 voice_… 原样放进 speechConfig.voiceConfig.voice，和预置音色一样。删除：DELETE /v1beta/voices/{id}。
 """
 from __future__ import annotations
 
 import json
 from urllib.parse import quote
 
-from .base import CloudEngine, ProviderError, b64, http
+import base64
+
+from .base import CloudEngine, ProviderError, b64, clone_file, http
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 PAGES = 20   # 音色库翻页上限：每页 1000，最多 2 万个
+
 
 
 class Gemini(CloudEngine):
@@ -65,3 +74,24 @@ class Gemini(CloudEngine):
         audio = b64(data["data"])
         # 带 RIFF 头就是 wav；否则按官方默认的无头 L16 24k 单声道处理
         return (audio, "wav") if audio[:4] == b"RIFF" else (audio, "s16le:24000:1")
+
+    # ---- 声音复刻 ----
+    def clone_create(self, ref):
+        if not ref.get("consent"):
+            phrase = self.m["compat"]["clone"]["consent"]   # 规定的原话在注册表里（compat.clone.consent），页面也从那里取
+            raise ProviderError(f"Gemini 要求声音的主人本人朗读一句同意声明并上传：「{phrase['zh']}」（英文：{phrase['en']}）。"
+                                f"录好后运行 vox clones edit {ref['id']} --consent 录音.m4a，或在网页音色库里编辑这个克隆音色")
+        src, _ = clone_file(ref)
+        consent, _ = clone_file(ref, key="consent")
+        audio = lambda p: {"mime_type": "audio/wav", "data": base64.b64encode(p.read_bytes()).decode()}
+        body = {"store": True, "voice": {"model": self.m["remote"], "type": "replicated", "display_name": ref["name"][:64],
+                                         "replicated": {"source_audio": audio(src), "consent_audio": audio(consent)}}}
+        _, _, raw = http("POST", f"{BASE}/voices", self._h(), body, timeout=180)
+        j = json.loads(raw)
+        vid = j.get("id") or (j.get("name") or "").split("/")[-1]
+        if not vid:
+            raise ProviderError(f"Gemini 没有返回音色 ID：{json.dumps(j, ensure_ascii=False)[:300]}")
+        return {"voice": vid, **({"expire_time": j["expire_time"]} if j.get("expire_time") else {})}
+
+    def clone_delete(self, remote):
+        http("DELETE", f"{BASE}/voices/{quote(remote['voice'], safe='')}", self._h(), timeout=30)

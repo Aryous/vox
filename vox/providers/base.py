@@ -77,6 +77,39 @@ def multipart(fields: list[tuple[str, str]], files: list[tuple[str, Path]]) -> t
     return bytes(out), f"multipart/form-data; boundary={b}"
 
 
+def clone_file(ref: dict, fmt: str = "wav", max_sec: float | None = None, key: str = "audio") -> tuple[Path, bool]:
+    """克隆音色的参考录音（24 kHz 单声道 wav，见 clones.py），按需转成 mp3、截到 max_sec 秒。
+    返回 (文件, 是否截短了)：截短后原来的文字稿就对不上了，调用方应当不再传文字稿。转换结果缓存在录音旁边。"""
+    import subprocess
+
+    src = Path(ref[key])
+    dur = float(ref.get("duration") or 0) if key == "audio" else 0
+    cut = bool(max_sec) and (dur == 0 or dur > max_sec)
+    if fmt == "wav" and not cut:
+        return src, False
+    out = src.with_name(f"{src.stem}.{fmt}" if not cut else f"{src.stem}.{int(max_sec)}s.{fmt}")
+    if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+        args = ["-b:a", "192k"] if fmt == "mp3" else []
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), *(["-t", str(max_sec)] if cut else []), *args, str(out)],
+                           capture_output=True, text=True)
+        if r.returncode:
+            raise ProviderError(f"参考录音转换失败：{r.stderr.strip()[:200]}")
+    return out, cut and dur > (max_sec or 0)
+
+
+def data_uri(p: Path) -> str:
+    mime = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}.get(p.suffix.lower(), "application/octet-stream")
+    return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode()}"
+
+
+def remote_id(ref: dict, prefix: str = "vox", maxlen: int = 32, sep: str = "") -> str:
+    """给云端起一个音色 ID：只用英文字母和数字，字母开头（各家规则的交集），带随机后缀避免和已有的重名。"""
+    import re
+
+    stem = re.sub(r"[^A-Za-z0-9]", "", ref.get("id", ""))[:10]
+    return f"{prefix}{sep}{stem}{sep if stem else ''}{os.urandom(4).hex()}"[:maxlen]
+
+
 def b64(s: str) -> bytes:
     return base64.b64decode(s)
 
@@ -171,3 +204,13 @@ class CloudEngine:
     # ---- 识别 ----
     def transcribe(self, req: dict, audio: Path) -> dict:
         raise ProviderError(f"{self.m['name']} 的适配器还不支持语音识别")
+
+    # ---- 克隆音色 ----
+    # compat.clone.mode = "voice"：clone_create 把录音注册成这家的音色，返回 {"voice": 音色 ID, ...}，合成时 req["voice"] 就是这个 ID；
+    #                    = "inline"：不注册，合成时 req["_clone"] 带着录音（audio 路径、text 文字稿），适配器自己放进请求。
+    # ref 字段：id（vox 里的 ID）/ name / audio（24 kHz 单声道 wav 路径）/ text（文字稿，可能为空）/ lang / consent（同意声明录音路径或 None）
+    def clone_create(self, ref: dict) -> dict:
+        raise ProviderError(f"{self.m['name']} 的适配器还不支持声音克隆")
+
+    def clone_delete(self, remote: dict):
+        """删除云端注册的音色（没有删除接口的厂商什么也不做）。"""

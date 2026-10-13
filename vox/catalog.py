@@ -7,7 +7,7 @@
 
 统一命名（CLI、HTTP、WebUI 共用）：
   模型 ID    提供方/模型，如 local/qwen3、openai/gpt-4o-mini-tts、local/qwen3-asr；本地模型也接受短名 qwen3
-  音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；自定义音色为 my:<id>
+  音色引用   模型短名:音色，如 qwen3:serena、kokoro:zf_003；我的预设为 preset:<id>（旧写法 my:<id>），克隆音色为 clone:<id>
   请求参数   model / input / voice / instructions / speed / seed / lang / temperature / top_p / top_k / repetition_penalty
 
 数据与代码分开：
@@ -26,7 +26,8 @@
   providers.<id>   name / kind（local|cloud）/ icon / region / credentials / optional / console / docs
                    adapter / key_env / compat（适配器配置）/ model_defaults（该家模型的公共字段）/ discover（在线列表怎么查）
   models[]         provider / remote（Provider 那边的模型 ID）/ name / caps / params / price / voices（"@音色集" 或列表）
-                   recommended（连接后默认加进「我的模型」）/ about / languages …
+                   recommended（连接后默认加进「我的模型」）/ about / languages / tags（简单标签：第一梯队、性价比、免费、开源首选）…
+                   caps.clone 表示能用克隆音色（clone:<id>，见 clones.py）；云端模型另需 compat.clone（mode / per_model / fee）
   stt_models[]     语音识别模型，字段同上（没有音色）。单独成表：旧版 vox 拉到新注册表时只认 models，不会把识别模型当成合成模型
                    本地识别模型另有两个可选字段：
                    prompt_format   {"base", "hotwords"}：模型要求的指令写法（如 MOSS 的分说话人指令，热词按 "热词提示：{}" 接在后面）
@@ -58,7 +59,7 @@ CONNECTION = ("base", "base_env", "auth")   # 两类任务共用的连接配置
 BASE_CAPS = {"voices": True, "instructions": False, "design": False, "seed": False, "native_speed": True}
 # 识别模型的能力：segments 分句时间戳（能做字幕）/ words 逐词时间戳 / diarize 区分说话人 / detect 自动识别语种 / prompt 上下文提示 / hotwords 热词
 STT_CAPS = {"segments": False, "words": False, "diarize": False, "detect": True, "prompt": False, "hotwords": False}
-TEMPLATE_DROP = ("id", "alias", "name", "recommended", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
+TEMPLATE_DROP = ("id", "alias", "name", "recommended", "tags", "price", "homepage", "about", "repo_env", "instr_examples", "source", "inferred")
 
 REG: dict = {}
 PROVIDERS: dict = {}
