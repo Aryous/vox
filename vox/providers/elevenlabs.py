@@ -48,7 +48,7 @@ class ElevenLabs(CloudEngine):
     def synth(self, req):
         voice = req.get("voice")
         if not voice:
-            raise ProviderError("ElevenLabs 需要 voice（voice_id），先在音色库里选一个")
+            raise ProviderError("ElevenLabs 需要指定 voice（voice_id），请先在音色库中选择")
         text = req["input"]
         model_id = self.m["remote"]
         if req.get("instructions") and model_id == "eleven_v3":
@@ -70,7 +70,7 @@ class ElevenLabs(CloudEngine):
         _, _, raw = http("POST", f"{BASE}/v1/voices/add", {**self._h(), "Content-Type": ctype}, body, timeout=180)
         j = json.loads(raw)
         if not j.get("voice_id"):
-            raise ProviderError(f"ElevenLabs 没有返回 voice_id：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"ElevenLabs 未返回 voice_id：{json.dumps(j, ensure_ascii=False)[:300]}")
         return {"voice": j["voice_id"], **({"requires_verification": True} if j.get("requires_verification") else {})}
 
     def clone_delete(self, remote):

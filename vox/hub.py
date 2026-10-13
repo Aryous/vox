@@ -4,10 +4,10 @@
   clips/            合成结果 wav（按请求哈希命名）
   samples/          音色样本
   history.json      合成历史（CLI / WebUI / API 共享）
-  presets.json      我的预设（模型 + 音色 + 指令 + 种子的组合；旧版叫「我的音色」，存在 my_voices.json）
+  presets.json      预设（模型 + 音色 + 指令 + 种子的组合；旧版叫「我的音色」，存在 my_voices.json）
   clones/           克隆音色（参考录音 + 文字稿），见 clones.py
   settings.json     设置（样本文本等）
-  models.json       我的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
+  models.json       已添加的模型：每家添加了哪些、手动添加的模型 ID、下载过的在线模型
   models/           下载的本地模型（不进 Time Machine 备份）
 缓存（在线列表、云端音色列表、新版注册表）在 ~/Library/Caches/vox，删了会重新获取。
 """
@@ -57,14 +57,14 @@ def _save(p: Path, data):
 
 # ---------- 模型 ----------
 # 「能不能用」是系统事实：本地模型下没下载、云端 Provider 连没连上（有没有 Key），不让用户开关。
-# 「想不想用」是用户选择：我的模型 = 能用的模型里，用户留下的那些。
-#   本地：下载了就在「我的模型」里，移除即删除文件。
+# 「想不想用」是用户选择：已添加的模型 = 能用的模型里，用户留下的那些。
+#   本地：下载了就在已添加的模型里，移除即删除文件。
 #   云端：连接 Provider 后，默认带上注册表推荐的模型；用户可以从在线列表添加更多、手动填模型 ID，或移除。
 def model_or_raise(mid: str) -> dict:
     m = catalog.find_model(mid)
     if not m:
         mine = [x["id"] for x in catalog.MODELS if is_mine(x)]
-        raise VoxError(f"未知模型「{mid}」。我的模型：{', '.join(mine) or '（空）'}；全部可用模型见 vox models --all")
+        raise VoxError(f"未知模型：{mid}。已添加的模型：{', '.join(mine) or '无'}。查看全部模型：vox models --all")
     return m
 
 
@@ -137,7 +137,7 @@ def _set_saved(pid: str, ids: list[str]):
 
 
 def add_model(mid: str | None = None, provider: str | None = None, remote: str | None = None, name: str | None = None, task: str = "tts") -> dict:
-    """加进「我的模型」。本地模型 = 开始下载；云端已知模型 = 加入清单；云端未知模型 ID = 作为手动添加的条目登记（task 指明是合成还是识别模型）。"""
+    """添加模型。本地模型 = 开始下载；云端已知模型 = 加入清单；云端未知模型 ID = 作为手动添加的条目登记（task 指明是合成还是识别模型）。"""
     if task not in catalog.TASKS:
         raise VoxError(f"task 只能是 {' / '.join(catalog.TASKS)}")
     m = catalog.find_model(mid) if mid else None
@@ -145,7 +145,7 @@ def add_model(mid: str | None = None, provider: str | None = None, remote: str |
         m = catalog.find_model(f"{provider}/{remote.strip()}")
     if m and m["task"] != task and task != "tts":
         if m["source"] == "registry":
-            raise VoxError(f"{m['id']} 是登记过的{'语音合成' if m['task'] == 'tts' else '语音识别'}模型，不能改成别的类型")
+            raise VoxError(f"{m['id']} 已登记为{'语音合成' if m['task'] == 'tts' else '语音识别'}模型，不能更改类型")
         provider, remote, mid, m = m["provider"], m["remote"], None, None   # 在线列表猜的类型不对：按用户说的登记
     if m and m["provider"] == "local":
         return pull(m["id"], background=True)
@@ -153,13 +153,13 @@ def add_model(mid: str | None = None, provider: str | None = None, remote: str |
         provider, remote = provider or (mid or "").split("/", 1)[0], (remote or (mid or "").split("/", 1)[-1]).strip()
         p = catalog.PROVIDERS.get(provider)
         if not p or p["kind"] != "cloud":
-            raise VoxError(f"未知模型「{mid or remote}」；手动添加云端模型请写成 provider/模型名，例如 openai/tts-1")
+            raise VoxError(f"未知模型：{mid or remote}。手动添加云端模型的格式为 provider/模型名，例如 openai/tts-1")
         if not remote or remote == provider:
             raise VoxError("模型名不能为空")
         if not p.get("adapter"):
-            raise VoxError(f"{p['name']} 没有配置适配器，不能手动添加")
+            raise VoxError(f"{p['name']} 未配置适配器，不支持手动添加")
         if not connected(provider):
-            raise VoxError(f"先连接 {p['name']}（填 Key），再添加它的模型")
+            raise VoxError(f"请先连接 {p['name']}（填写 Key），再添加模型")
         with FILE_LOCK:
             pr = _prefs()
             pr["custom"] = [c for c in pr["custom"] if not (c["provider"] == provider and c["remote"] == remote)]
@@ -168,26 +168,26 @@ def add_model(mid: str | None = None, provider: str | None = None, remote: str |
         catalog.rebuild()
         m = catalog.find_model(f"{provider}/{remote}")
     if not connected(m["provider"]):
-        raise VoxError(f"先连接 {catalog.PROVIDERS[m['provider']]['name']}（填 Key），再添加它的模型")
+        raise VoxError(f"请先连接 {catalog.PROVIDERS[m['provider']]['name']}（填写 Key），再添加模型")
     with FILE_LOCK:
         _set_saved(m["provider"], _saved(m["provider"]) + [m["id"]])
     return {"model": m["id"], "mine": True}
 
 
 def remove_model(mid: str, delete_files: bool = False) -> dict:
-    """移出「我的模型」。本地模型要删除已下载的文件，必须显式确认（delete_files）。"""
+    """移除模型。本地模型要删除已下载的文件，必须显式确认（delete_files）。"""
     m = model_or_raise(mid)
     if m["provider"] == "local":
         e = engines.get(m)
         path = e.local_path()
         if not delete_files:
-            raise VoxError(f"移除本地模型会删除已下载的文件 {path}（{m.get('size_gb') or '?'} GB）。确认请加 --delete-files")
+            raise VoxError(f"移除本地模型将删除已下载的文件 {path}（{m.get('size_gb') or '?'} GB）。确认删除请添加 --delete-files")
         if PULLS.get(m["id"], {}).get("state") == "running":
-            raise VoxError("正在下载，等下载结束再删除")
+            raise VoxError("模型正在下载，请在下载完成后再删除")
         allowed = (fetch.ROOT.resolve(), (Path.home() / ".cache" / "huggingface" / "hub").resolve())
         rp = path.resolve()
         if not any(rp != root and root in rp.parents for root in allowed):
-            raise VoxError(f"模型文件不在 vox 管理的目录里，不自动删除：{path}")
+            raise VoxError(f"模型文件不在 vox 管理的目录中，不会自动删除：{path}")
         with SYNTH_LOCK:
             engines.unload(m["id"])
             shutil.rmtree(rp, ignore_errors=True)
@@ -206,7 +206,7 @@ def remove_model(mid: str, delete_files: bool = False) -> dict:
 def discover(provider: str) -> dict:
     """向 Provider（本地为 HuggingFace）查询现在提供的 TTS 模型，结果并进目录，返回这家的全部模型。"""
     if provider not in catalog.PROVIDERS:
-        raise VoxError(f"未知的 Provider「{provider}」")
+        raise VoxError(f"未知的 Provider：{provider}")
     try:
         res = discovery.run(provider)
     except providers.ProviderError as e:
@@ -228,13 +228,13 @@ def registry_update(url: str | None = None) -> dict:
         _, _, body = providers.base.http("GET", url, timeout=30)
         reg = json.loads(body)
     except (providers.ProviderError, ValueError) as e:
-        raise VoxError(f"拉取注册表失败（{url}）：{e}") from None
+        raise VoxError(f"获取注册表失败（{url}）：{e}") from None
     if not catalog.valid(reg):
-        raise VoxError("拉到的文件不是 vox 注册表（schema 不对）")
+        raise VoxError("获取的文件不是有效的 vox 注册表（schema 不匹配）")
     unknown = sorted({a for p in reg["providers"].values() if p.get("kind") == "cloud"
                       for a in (p.get("adapter"), (p.get("stt") or {}).get("adapter")) if a} - set(providers.ADAPTERS))
     if unknown:
-        raise VoxError(f"新注册表需要这个版本没有的适配器：{', '.join(unknown)}。请先升级 vox")
+        raise VoxError(f"新注册表需要当前版本不包含的适配器：{', '.join(unknown)}。请先升级 vox")
     cur = catalog.REG.get("updated", "")
     if str(reg.get("updated", "")) <= str(cur):
         return {**registry_info(), "changed": False}
@@ -249,11 +249,11 @@ def _engine(m: dict):
         e = providers.engine_for(m)
         if not e.is_ready():
             p = catalog.PROVIDERS[m["provider"]]
-            raise VoxError(f"{p['name']} 还没连接：vox keys set {m['key_env']}，或在 WebUI「模型」页选中这家后填 Key（申请地址 {p['console']}）")
+            raise VoxError(f"{p['name']} 尚未连接。连接方式：vox keys set {m['key_env']}，或在网页「模型」页选择该 Provider 后填写 Key（申请地址：{p['console']}）")
         return e
     e = engines.get(m)
     if not e.is_ready():
-        raise VoxError(f"模型 {m['id']} 还没下载：vox models add {catalog.short(m)}（约 {m.get('size_gb') or '?'} GB）")
+        raise VoxError(f"模型 {m['id']} 尚未下载。下载命令：vox models add {catalog.short(m)}（约 {m.get('size_gb') or '?'} GB）")
     return e
 
 
@@ -291,7 +291,7 @@ def pull(mid: str, background=False, source="modelscope") -> dict:
     if m["provider"] != "local":
         raise VoxError("云端模型无需下载")
     if m["engine"] == "kokoro":
-        raise VoxError("Kokoro 首次合成时会自动下载（约 330 MB）")
+        raise VoxError("Kokoro 将在首次合成时自动下载（约 330 MB）")
     _keep_local(m)
 
     def run():
@@ -343,11 +343,11 @@ def _clone_rev(req: dict) -> str | None:
 
 
 def voices(model: str | None = None, lang: str | None = None, gender: str | None = None, q: str | None = None, with_samples=True) -> list[dict]:
-    """音色库：默认只列「我的模型」的音色；指定 model 时列这个模型的全部音色（添加前也能看）。"""
+    """音色库：默认只列已添加的模型的音色；指定 model 时列这个模型的全部音色（添加前也能看）。"""
     out = []
     target = catalog.find_model(model) if model else None
     if model and not target:
-        raise VoxError(f"未知模型「{model}」")
+        raise VoxError(f"未知模型：{model}")
     for m in catalog.MODELS:
         if (target and m is not target) or (not target and not is_mine(m)) or not m["caps"].get("voices"):
             continue
@@ -371,7 +371,7 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
         if model and m is not catalog.find_model(model):
             continue
         out.append({"ref": f"preset:{v['id']}", "model": v.get("model"), "voice": v.get("voice"), "name": v["name"], "gender": v.get("gender", ""), "lang": v.get("lang_label", ""),
-                    "description": v.get("instructions") or "我的预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
+                    "description": v.get("instructions") or "预设", "kind": "preset", "request": {k: v[k] for k in REQ_KEYS if k in v and k != "input"}})
     # 克隆音色不属于某个模型：指定了支持克隆的模型就挂在它下面，否则挂在它的首选模型下面（试听用）
     for c in clones.records() if not target or target["caps"].get("clone") else []:
         cm = target or _clone_model_of(c)
@@ -396,19 +396,19 @@ def voices(model: str | None = None, lang: str | None = None, gender: str | None
 
 
 def resolve_voice(ref: str) -> dict:
-    """把音色引用展开成请求参数：qwen3:serena（预置音色）、preset:xxx（我的预设，旧写法 my:xxx）。
+    """把音色引用展开成请求参数：qwen3:serena（预置音色）、preset:xxx（预设，旧写法 my:xxx）。
     克隆音色 clone:xxx 不展开，原样留在 voice 里，合成时再换成各家需要的形式（见 _render）。"""
     if ref.startswith(("preset:", "my:")):
         pid = ref.split(":", 1)[1]
         v = next((x for x in presets() if x["id"] == pid), None)
         if not v:
-            raise VoxError(f"没有预设 {ref}（vox presets 查看已有的）")
+            raise VoxError(f"预设 {ref} 不存在。查看已有预设：vox presets")
         return {k: v[k] for k in REQ_KEYS if k in v and k != "input"}
     # 音色 ID 本身可能含冒号（如硅基流动），所以从左往右找第一个能匹配上模型的前缀
     for i, ch in enumerate(ref):
         if ch == ":" and catalog.find_model(ref[:i]):
             return {"model": catalog.find_model(ref[:i])["id"], "voice": ref[i + 1:]}
-    raise VoxError(f"音色引用格式是 模型:音色，例如 qwen3:serena（收到 {ref}）")
+    raise VoxError(f"音色引用格式应为「模型:音色」，例如 qwen3:serena（收到：{ref}）")
 
 
 def _sample_request(v: dict, text: str) -> dict:
@@ -419,7 +419,7 @@ def _sample_request(v: dict, text: str) -> dict:
 def sample(ref: str) -> dict:
     v = next((x for x in voices(with_samples=False) if x["ref"] == ref), None)
     if not v:
-        raise VoxError(f"没有音色 {ref}")
+        raise VoxError(f"音色 {ref} 不存在")
     req = _sample_request(v, settings()["sample_text"])
     f = SAMPLES / f"{_sample_key(ref, req)}.wav"
     if not f.exists():
@@ -428,7 +428,7 @@ def sample(ref: str) -> dict:
 
 
 def presets() -> list[dict]:
-    """我的预设。旧版叫「我的音色」（my_voices.json），第一次读取时原样搬到 presets.json。"""
+    """预设。旧版叫「我的音色」（my_voices.json），第一次读取时原样搬到 presets.json。"""
     if not PRESETS.exists() and paths.MY_VOICES.exists():
         with FILE_LOCK:
             if not PRESETS.exists():
@@ -453,7 +453,7 @@ def delete_preset(vid: str):
 
 # ---------- 克隆音色 ----------
 def clone_model(required=True) -> dict | None:
-    """默认的克隆模型：设置里的 clone_model，否则「我的模型」里第一个能用的、支持克隆的模型（本地优先，不花钱）。"""
+    """默认的克隆模型：设置里的 clone_model，否则已添加的模型里第一个能用的、支持克隆的模型（本地优先，不花钱）。"""
     pick = catalog.find_model(settings().get("clone_model") or "")
     if pick and pick["caps"].get("clone") and usable(pick):
         return pick
@@ -462,8 +462,8 @@ def clone_model(required=True) -> dict | None:
     if m or not required:
         return m
     local = next((m for m in clones.models_for() if m["provider"] == "local"), None)
-    hint = f"下载一个本地克隆模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "先添加一个支持克隆的模型"
-    raise VoxError(f"还没有能用的克隆模型。{hint}；或连接支持克隆的云端 Provider，见 vox models --all 里标着「克隆」的")
+    hint = f"可下载本地克隆模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "请先添加支持克隆的模型"
+    raise VoxError(f"暂无可用的克隆模型。{hint}；也可连接支持克隆的云端 Provider（vox models --all 中标有「克隆」的模型）")
 
 
 def _clone_models_text() -> str:
@@ -526,15 +526,15 @@ def _clone_for(m: dict, req: dict, accept_fee: bool = False) -> dict:
     if not r:
         pname = catalog.PROVIDERS[m["provider"]]["name"]
         if cc.get("min_sec") and (c.get("duration") or 0) < cc["min_sec"]:
-            raise VoxError(f"{pname} 要求参考录音至少 {cc['min_sec']} 秒，这段只有 {c.get('duration')} 秒：换一段更长的录音重新克隆")
+            raise VoxError(f"{pname} 要求参考录音至少 {cc['min_sec']} 秒，当前录音为 {c.get('duration')} 秒。请使用更长的录音重新克隆")
         if cc.get("fee") and not accept_fee:
-            raise VoxError(f"第一次在 {pname} 使用「{c['name']}」要先把录音上传过去，这家收费：{cc['fee']}。"
-                           f"确认后重试：CLI 加 --accept-fee，HTTP 请求加 \"accept_fee\": true")
+            raise VoxError(f"首次在 {pname} 使用「{c['name']}」需上传录音，该服务商收费：{cc['fee']}。"
+                           f"确认后重试：命令行添加 --accept-fee，HTTP 请求添加 \"accept_fee\": true")
         e = providers.engine_for(m)
         try:
             info = e.clone_create(ref)
         except providers.ProviderError as err:
-            raise VoxError(f"{catalog.PROVIDERS[m['provider']]['name']}：注册克隆音色失败：{err}") from None
+            raise VoxError(f"{catalog.PROVIDERS[m['provider']]['name']}：克隆音色注册失败：{err}") from None
         r = clones.save_remote(c, m, info)["remote"][clones.remote_key(m)]
     return {"voice": r["voice"]}
 
@@ -557,7 +557,7 @@ def normalize(req: dict, strict=True) -> dict:
         req = {**resolve_voice(v), **{k: x for k, x in req.items() if k != "voice"}}
     m = model_or_raise(req.get("model") or os.environ.get("VOX_MODEL", "local/qwen3"))
     if m["task"] != "tts":
-        raise VoxError(f"{m['id']} 是语音识别模型，不能合成；识别请用 vox transcribe 或 POST /v1/audio/transcriptions")
+        raise VoxError(f"{m['id']} 是语音识别模型，不支持合成。语音识别请使用 vox transcribe 或 POST /v1/audio/transcriptions")
     if strict and not str(req.get("input", "")).strip():
         raise VoxError("input 不能为空")
     out = {"model": m["id"], "input": str(req.get("input", "")).strip()}
@@ -567,7 +567,7 @@ def normalize(req: dict, strict=True) -> dict:
     if "speed" in out:
         out["speed"] = float(out["speed"])
         if not 0.25 <= out["speed"] <= 4:
-            raise VoxError("speed 取值 0.25–4")
+            raise VoxError("speed 的取值范围为 0.25–4")
     if "seed" in out:
         out["seed"] = int(out["seed"])
     if clones.is_ref(out.get("voice")):
@@ -579,12 +579,12 @@ def normalize(req: dict, strict=True) -> dict:
             raise VoxError(str(e)) from None
     elif m["caps"].get("clone") and not m["caps"].get("voices"):
         if strict:
-            names = "、".join(f"clone:{c['id']}" for c in clones.records()[:5]) or "还没有，先用 vox clone add 录音.m4a 新建"
-            raise VoxError(f"{m['id']} 只能用克隆音色：-v clone:<id>（{names}）")
+            names = "、".join(f"clone:{c['id']}" for c in clones.records()[:5]) or "暂无，创建命令：vox clones add 录音.m4a -n 名称"
+            raise VoxError(f"{m['id']} 仅支持克隆音色，请使用 -v clone:<id>（可用：{names}）")
     elif m["caps"].get("voices") and not out.get("voice"):
         out["voice"] = m.get("default_voice")
     if m["caps"].get("design") and strict and not out.get("instructions"):
-        raise VoxError(f"{m['id']} 需要 instructions 描述声音，例如「{catalog.DESIGN_EXAMPLES[1]}」")
+        raise VoxError(f"{m['id']} 需要通过 instructions 提供声音描述，例如「{catalog.DESIGN_EXAMPLES[1]}」")
     return out
 
 
@@ -689,7 +689,7 @@ def asr(cid: str) -> str:
 
     f = clip_path(cid)
     if not f.exists():
-        raise VoxError("找不到这条音频")
+        raise VoxError("音频不存在")
     m = stt.local_model()
     if m:
         text = stt.transcribe(f, {"model": m["id"]}, source="asr", record=False)["text"]
@@ -697,7 +697,7 @@ def asr(cid: str) -> str:
         r = subprocess.run(["coli", "asr", str(f)], capture_output=True, text=True, timeout=180)
         text = (r.stdout.strip().splitlines() or [""])[-1]
     else:
-        raise VoxError("读音校对需要一个本地识别模型：vox models add qwen3-asr（约 1 GB）")
+        raise VoxError("读音校对需要本地识别模型。下载命令：vox models add qwen3-asr（约 1 GB）")
     with FILE_LOCK:
         h = history()
         for x in h:
@@ -755,13 +755,13 @@ def _custom_cfgs() -> dict:
 def _clean_cfg(cfg: dict) -> dict:
     base = str(cfg.get("base_url", "")).strip().rstrip("/")
     if not re.match(r"^https?://[^\s/]+", base):
-        raise VoxError("Base URL 要以 http:// 或 https:// 开头，例如 http://127.0.0.1:8880/v1")
+        raise VoxError("Base URL 须以 http:// 或 https:// 开头，例如 http://127.0.0.1:8880/v1")
     t = cfg.get("type", "openai")
     if t not in catalog.PROVIDER_TYPES:
-        raise VoxError(f"不支持的类型 {t}，可选：{', '.join(catalog.PROVIDER_TYPES)}")
+        raise VoxError(f"不支持的类型 {t}。可选类型：{', '.join(catalog.PROVIDER_TYPES)}")
     mode = cfg.get("instructions", "instructions")
     if mode not in catalog.INSTRUCTION_MODES:
-        raise VoxError(f"情绪指令写法只能是：{', '.join(catalog.INSTRUCTION_MODES)}")
+        raise VoxError(f"情绪指令的传递方式须为以下之一：{', '.join(catalog.INSTRUCTION_MODES)}")
     voices = cfg.get("voices") or []
     voices = [v.strip() for v in (voices.split(",") if isinstance(voices, str) else voices) if str(v).strip()]
     out = {"name": str(cfg.get("name") or "").strip(), "type": t, "base_url": base, "auth": bool(cfg.get("auth", True)),
@@ -774,12 +774,12 @@ def provider_save(pid: str, cfg: dict, key: str | None = None, overwrite: bool =
     """新增或修改自定义 Provider；有 Key 就一起保存，能连上就顺带查一次模型列表。"""
     pid = (pid or "").strip().lower()
     if not PID_RE.match(pid):
-        raise VoxError("ID 用 2–32 个小写字母、数字或连字符，例如 my-kokoro")
+        raise VoxError("ID 须由 2–32 个小写字母、数字或连字符组成，例如 my-kokoro")
     existing = _custom_cfgs()
     if pid in catalog.PROVIDERS and not catalog.PROVIDERS[pid].get("custom"):
-        raise VoxError(f"「{pid}」是内置 Provider 的 ID，换一个")
+        raise VoxError(f"「{pid}」是内置 Provider 的 ID，请使用其他 ID")
     if pid in existing and not overwrite:
-        raise VoxError(f"已经有叫「{pid}」的自定义 Provider；要修改请用编辑")
+        raise VoxError(f"自定义 Provider「{pid}」已存在。如需修改，请使用编辑功能")
     clean = _clean_cfg(cfg)
     with FILE_LOCK:
         cfgs = _custom_cfgs()
@@ -800,10 +800,10 @@ def provider_save(pid: str, cfg: dict, key: str | None = None, overwrite: bool =
 
 
 def provider_remove(pid: str) -> dict:
-    """删除自定义 Provider：配置、我的模型里它的模型、在线列表缓存，以及凭证文件里它的 Key（环境变量里的不动）。"""
+    """删除自定义 Provider：配置、已添加的模型里它的模型、在线列表缓存，以及凭证文件里它的 Key（环境变量里的不动）。"""
     p = catalog.PROVIDERS.get(pid)
     if not p or not p.get("custom"):
-        raise VoxError(f"「{pid}」不是自定义 Provider，内置的不能删除")
+        raise VoxError(f"「{pid}」不是自定义 Provider，内置 Provider 不能删除")
     env = p.get("key_env")
     with FILE_LOCK:
         cfgs = _custom_cfgs()
@@ -832,7 +832,7 @@ def provider_test(cfg: dict | None = None, pid: str | None = None, key: str | No
         clean = _clean_cfg(cfg or {})
     base, h = clean["base_url"], ({"Authorization": f"Bearer {key.strip()}"} if key and key.strip() else {})
     if clean.get("auth") and not h:
-        raise VoxError("这个服务需要 Key：先填 Key 再测试")
+        raise VoxError("该服务需要 Key，请填写后再测试")
     out = {"base_url": base, "ok": False, "models": [], "voices": None, "error": None}
     try:
         _, _, body = providers.base.http("GET", f"{base}/models", h, timeout=15)
@@ -866,7 +866,7 @@ def _known_env(env: str) -> bool:
 
 def set_key(env: str, value: str) -> dict:
     if not _known_env(env):
-        raise VoxError(f"不认识的凭证名 {env}")
+        raise VoxError(f"无法识别的凭证名：{env}")
     if not value.strip():
         raise VoxError("值不能为空")
     credentials.set(env, value)
@@ -876,7 +876,7 @@ def set_key(env: str, value: str) -> dict:
 
 def delete_key(env: str) -> dict:
     if not _known_env(env):
-        raise VoxError(f"不认识的凭证名 {env}")
+        raise VoxError(f"无法识别的凭证名：{env}")
     credentials.delete(env)
     return credentials.status(env)
 

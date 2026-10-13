@@ -65,7 +65,7 @@ class DashScope(CloudEngine):
             raise ProviderError(f"{j.get('code')}：{j.get('message')}")
         audio_url = ((j.get("output") or {}).get("audio") or {}).get("url")
         if not audio_url:
-            raise ProviderError(f"百炼没有返回音频地址：{json.dumps(j, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"百炼未返回音频地址：{json.dumps(j, ensure_ascii=False)[:300]}")
         _, _, audio = http("GET", audio_url, timeout=120)
         ext = audio_url.split("?")[0].rsplit(".", 1)[-1].lower()
         return audio, ext if ext in ("mp3", "wav", "opus", "pcm") else "mp3"
@@ -88,7 +88,7 @@ class DashScope(CloudEngine):
             inp["text"] = ref["text"]
         out = self._enroll(inp)
         if not out.get("voice"):
-            raise ProviderError(f"百炼没有返回音色：{json.dumps(out, ensure_ascii=False)[:300]}")
+            raise ProviderError(f"百炼未返回音色：{json.dumps(out, ensure_ascii=False)[:300]}")
         return {"voice": out["voice"], **({"fallback": out.get("fallback_reason") or True} if out.get("fallback_mode") else {})}
 
     def clone_delete(self, remote):

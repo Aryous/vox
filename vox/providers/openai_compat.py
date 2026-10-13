@@ -114,7 +114,7 @@ class OpenAICompat(CloudEngine):
         if instr:
             mode = c.get("instructions")
             if c.get("english_only") and CJK.search(instr):
-                raise ProviderError(f"{self.m['name']} 的 instructions 只能写英文（官方要求），例如 speak warmly and slowly")
+                raise ProviderError(f"{self.m['name']} 的 instructions 仅支持英文（官方要求），例如 speak warmly and slowly")
             if mode == "prefix":
                 text = f"{instr}<|endofprompt|>{text}"
             elif mode:
@@ -127,7 +127,7 @@ class OpenAICompat(CloudEngine):
             body["speed"] = clamp(float(req["speed"]), lo, hi)
         _, headers, audio = http("POST", f"{self.base}/audio/speech", self._h(), body)
         if audio[:1] == b"{":  # 少数情况下返回 JSON（如阶跃 return_url），不当音频处理
-            raise ProviderError(f"没有返回音频：{audio[:300].decode('utf-8', 'replace')}")
+            raise ProviderError(f"未返回音频：{audio[:300].decode('utf-8', 'replace')}")
         return audio, "mp3"
 
     def transcribe(self, req, audio: Path):
@@ -149,7 +149,7 @@ class OpenAICompat(CloudEngine):
         except ValueError:
             return {"text": raw.decode("utf-8", "replace").strip(), "segments": [], "words": []}   # 有的服务无视 response_format，直接回纯文本
         if not isinstance(j, dict):
-            raise ProviderError(f"识别结果格式不对：{raw[:200].decode('utf-8', 'replace')}")
+            raise ProviderError(f"识别结果格式无效：{raw[:200].decode('utf-8', 'replace')}")
         return parse_transcription(j)
 
     # ---- 声音克隆（按 compat.clone.kind 选注册接口）----
@@ -157,15 +157,15 @@ class OpenAICompat(CloudEngine):
         kind = self.c.get("clone", {}).get("kind")
         if kind == "siliconflow":
             if not ref.get("text"):
-                raise ProviderError("硅基流动要求参考录音的文字稿：先给这个克隆音色补上文字稿（vox clones edit <id> --text …）")
+                raise ProviderError("硅基流动要求提供参考录音的文字稿。请先为该克隆音色添加文字稿：vox clones edit <id> --text …")
             f, cut = clone_file(ref, max_sec=29)
             if cut:
-                raise ProviderError("硅基流动要求参考录音短于 30 秒")
+                raise ProviderError("硅基流动要求参考录音不超过 30 秒")
             body = {"model": self.m["remote"], "customName": remote_id(ref, "vox", 32), "audio": data_uri(f), "text": ref["text"]}
             _, _, raw = http("POST", f"{self.base}/uploads/audio/voice", self._h(), body, timeout=180)
             uri = json.loads(raw).get("uri")
             if not uri:
-                raise ProviderError(f"硅基流动没有返回音色 uri：{raw[:300].decode('utf-8', 'replace')}")
+                raise ProviderError(f"硅基流动未返回音色 uri：{raw[:300].decode('utf-8', 'replace')}")
             return {"voice": uri}
         if kind == "inworld":
             f, cut = clone_file(ref, max_sec=30)
@@ -174,7 +174,7 @@ class OpenAICompat(CloudEngine):
             _, _, raw = http("POST", f"{INWORLD_VOICES}:clone", {"Authorization": f"Basic {self.cred(self.m['key_env'])}"}, body, timeout=180)
             vid = (json.loads(raw).get("voice") or {}).get("voiceId")
             if not vid:
-                raise ProviderError(f"Inworld 没有返回 voiceId：{raw[:300].decode('utf-8', 'replace')}")
+                raise ProviderError(f"Inworld 未返回 voiceId：{raw[:300].decode('utf-8', 'replace')}")
             return {"voice": vid}
         if kind == "stepfun":
             f, cut = clone_file(ref, max_sec=10)   # 阶跃要求 5–10 秒
@@ -182,12 +182,12 @@ class OpenAICompat(CloudEngine):
             _, _, raw = http("POST", f"{self.base}/files", {**self._h(), "Content-Type": ctype}, body, timeout=180)
             fid = json.loads(raw).get("id")
             if not fid:
-                raise ProviderError(f"阶跃上传录音没有返回文件 ID：{raw[:300].decode('utf-8', 'replace')}")
+                raise ProviderError(f"阶跃星辰上传录音后未返回文件 ID：{raw[:300].decode('utf-8', 'replace')}")
             req = {"model": self.m["remote"], "file_id": fid, **({"text": ref["text"]} if ref.get("text") and not cut else {})}
             _, _, raw = http("POST", f"{self.base}/audio/voices", self._h(), req, timeout=180)
             vid = json.loads(raw).get("id")
             if not vid:
-                raise ProviderError(f"阶跃没有返回音色 ID：{raw[:300].decode('utf-8', 'replace')}")
+                raise ProviderError(f"阶跃星辰未返回音色 ID：{raw[:300].decode('utf-8', 'replace')}")
             return {"voice": vid}
         return super().clone_create(ref)
 

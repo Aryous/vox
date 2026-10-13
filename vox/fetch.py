@@ -84,12 +84,12 @@ def fetch(repo: str, source: str = "modelscope") -> Path:
             if r.returncode == 0:
                 break
             out.unlink(missing_ok=True)
-            print(f"  {src} 上取不到，换下一个来源", file=sys.stderr)
+            print(f"  {src} 获取失败，切换至下一个来源", file=sys.stderr)
         else:
             raise SystemExit(f"✗ 下载失败：{path}")
         if out.stat().st_size != size or _digest(out, oid[0]) != oid[1]:
             out.unlink()
-            raise SystemExit(f"✗ 校验失败：{path}（已删除，重跑 vox pull 会重新下载）")
+            raise SystemExit(f"✗ 校验失败：{path}。文件已删除，重新运行 vox pull 将重新下载")
     (dest / ".vox-complete").write_text(json.dumps({"repo": repo, "source": source}))
     print(f"✓ 校验通过，模型在 {dest}", file=sys.stderr)
     return dest

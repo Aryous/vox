@@ -1,9 +1,9 @@
 """语音识别（声音 → 文字）：vox transcribe、POST /v1/audio/transcriptions、WebUI「转写」共用这里。
 
-和合成共用 hub 里的模型体系（我的模型、下载、加载、Key、Provider），这里只管识别自己的事。
+和合成共用 hub 里的模型体系（已添加的模型、下载、加载、Key、Provider），这里只管识别自己的事。
 
 请求字段（CLI / HTTP / WebUI 同一套）：
-  model      识别模型（task=stt）。不填用默认：设置里的 stt_model，否则「我的模型」里第一个能用的识别模型
+  model      识别模型（task=stt）。不填用默认：设置里的 stt_model，否则已添加的模型里第一个能用的识别模型
   language   语种提示（zh / en / ja……），不填自动识别
   prompt     上下文提示（专有名词、前文）；模型不支持就不传
   hotwords   热词列表；模型不支持就不传
@@ -15,6 +15,7 @@
 
 结果（paths.TRANSCRIPTS/<id>.json）：
   id / ts / source / file（原文件名）/ request / text / language / duration / segments[{start,end,text,speaker?}] / words[] / elapsed / cost
+  / audio（是否留了音频副本 <id>.m4a：单声道 AAC 64 kbps，一小时约 30 MB，回看时能点句播放，和记录一起删）
   id = 文件内容哈希 + 请求：同一个文件、同样的参数直接返回上次的结果。
 输出格式：txt / srt / vtt / json（render）。
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -35,7 +37,7 @@ FORMATS = ("txt", "srt", "vtt", "json")
 
 # ---------- 模型 ----------
 def stt_models(mine: bool = True) -> list[dict]:
-    """识别模型（默认只要「我的模型」里的），按注册表顺序。"""
+    """识别模型（默认只要已添加的模型里的），按注册表顺序。"""
     return [m for m in catalog.MODELS if m["task"] == "stt" and (not mine or hub.is_mine(m))]
 
 
@@ -48,8 +50,8 @@ def default_model() -> dict:
         if hub.usable(m):
             return m
     local = next((m for m in catalog.MODELS if m["task"] == "stt" and m["provider"] == "local"), None)
-    hint = f"下载一个本地识别模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "先添加一个识别模型"
-    raise VoxError(f"还没有能用的语音识别模型。{hint}；或连接支持识别的云端 Provider，见 vox models --task stt --all")
+    hint = f"可下载本地识别模型：vox models add {catalog.short(local)}（约 {local.get('size_gb')} GB）" if local else "请先添加识别模型"
+    raise VoxError(f"暂无可用的语音识别模型。{hint}；也可连接支持识别的云端 Provider（vox models --task stt --all）")
 
 
 def local_model() -> dict | None:
@@ -65,8 +67,8 @@ def _model(mid: str | None) -> dict:
         return default_model()
     m = hub.model_or_raise(mid)
     if m["task"] != "stt":
-        others = ", ".join(catalog.short(x) for x in stt_models()) or "（还没有，见 vox models --task stt --all）"
-        raise VoxError(f"{m['id']} 是语音合成模型，不能识别。我的识别模型：{others}")
+        others = ", ".join(catalog.short(x) for x in stt_models()) or "无（查看可用模型：vox models --task stt --all）"
+        raise VoxError(f"{m['id']} 是语音合成模型，不支持识别。已添加的识别模型：{others}")
     return m
 
 
@@ -88,7 +90,7 @@ def normalize(req: dict) -> dict:
         if _truthy(req.get(k)):
             if not caps.get(need):
                 able = [catalog.short(x) for x in catalog.MODELS if x["task"] == "stt" and x["caps"].get(need)]
-                raise VoxError(f"{m['name']} 不支持{what}。支持的模型：{', '.join(able) or '（暂无）'}")
+                raise VoxError(f"{m['name']} 不支持{what}。支持的模型：{', '.join(able) or '暂无'}")
             out[k] = True
     return out
 
@@ -129,7 +131,11 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
     cid = hashlib.sha1((_file_hash(src) + json.dumps(req, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()[:16]
     out = DIR / f"{cid}.json"
     if out.exists() and request.get("cache") is not False:
-        return {**json.loads(out.read_text()), "cached": True}
+        rec = json.loads(out.read_text())
+        if record and not rec.get("audio") and _keep_audio(src, cid):   # 旧记录没留音频：这次顺手补上
+            rec["audio"] = True
+            out.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
+        return {**rec, "cached": True}
     eng = hub._engine(m)
     t = time.time()
     with tempfile.TemporaryDirectory(prefix="vox-stt-") as work:
@@ -163,10 +169,33 @@ def transcribe(src: Path, request: dict, source: str = "cli", filename: str | No
     if not record:
         return rec
     DIR.mkdir(parents=True, exist_ok=True)
+    rec["audio"] = _keep_audio(src, cid)
     tmp = out.with_suffix(".tmp")
     tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
     tmp.replace(out)
     return rec
+
+
+def _keep_audio(src: Path, cid: str) -> bool:
+    """留一份压缩音频，回看转写时能点句播放。失败不影响转写本身。"""
+    DIR.mkdir(parents=True, exist_ok=True)
+    dst, tmp = DIR / f"{cid}.m4a", DIR / f"{cid}.tmp.m4a"
+    try:
+        audio._ff()
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", str(tmp)], capture_output=True)
+        if r.returncode or not tmp.exists():
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(dst)
+        return True
+    except (OSError, SystemExit):
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+def audio_path(cid: str) -> Path | None:
+    f = DIR / f"{cid}.m4a"
+    return f if len(cid) == 16 and all(c in "0123456789abcdef" for c in cid) and f.exists() else None
 
 
 # ---------- 记录 ----------
@@ -178,7 +207,7 @@ def records(limit: int | None = None) -> list[dict]:
             r = json.loads(f.read_text())
         except ValueError:
             continue
-        out.append({k: r.get(k) for k in ("id", "ts", "source", "file", "request", "language", "duration", "elapsed", "cost", "timed")}
+        out.append({k: r.get(k) for k in ("id", "ts", "source", "file", "request", "language", "duration", "elapsed", "cost", "timed", "audio")}
                    | {"preview": " ".join(r.get("text", "").split("\n"))[:120], "speakers": len({s.get("speaker") for s in r.get("segments", []) if s.get("speaker")})})
     out.sort(key=lambda r: r["ts"] or 0, reverse=True)
     return out[:limit] if limit else out
@@ -187,13 +216,14 @@ def records(limit: int | None = None) -> list[dict]:
 def get(cid: str) -> dict:
     f = DIR / f"{cid}.json"
     if not (len(cid) == 16 and all(c in "0123456789abcdef" for c in cid)) or not f.exists():
-        raise VoxError("找不到这条转写")
+        raise VoxError("转写记录不存在")
     return json.loads(f.read_text())
 
 
 def delete(cid: str) -> dict:
     get(cid)
     (DIR / f"{cid}.json").unlink()
+    (DIR / f"{cid}.m4a").unlink(missing_ok=True)
     return {"id": cid, "deleted": True}
 
 
@@ -209,8 +239,8 @@ def _ts(sec: float, sep: str) -> str:
 def _cues(rec: dict) -> list[dict]:
     if not rec.get("timed") or not rec.get("segments"):
         timed = [catalog.short(m) for m in catalog.MODELS if m["task"] == "stt" and (m["caps"].get("segments") or m["caps"].get("diarize"))]
-        raise VoxError(f"这条转写没有分句时间戳（{rec['request']['model']} 只给整段文本），导不出字幕。"
-                       f"要字幕请换带时间戳的模型：{', '.join(timed) or '（暂无）'}")
+        raise VoxError(f"该转写没有分句时间戳（{rec['request']['model']} 仅输出整段文本），无法导出字幕。"
+                       f"如需字幕，请使用支持时间戳的模型：{', '.join(timed) or '暂无'}")
     return rec["segments"]
 
 
@@ -236,4 +266,4 @@ def render(rec: dict, fmt: str = "txt") -> str:
         return "\n".join(f"{i}\n{_ts(s['start'], ',')} --> {_ts(s['end'], ',')}\n{_line(s)}\n" for i, s in enumerate(_cues(rec), 1))
     if fmt == "vtt":
         return "WEBVTT\n\n" + "\n".join(f"{_ts(s['start'], '.')} --> {_ts(s['end'], '.')}\n{_line(s)}\n" for s in _cues(rec))
-    raise VoxError(f"不支持的格式 {fmt}，可选：{', '.join(FORMATS)}")
+    raise VoxError(f"不支持的格式 {fmt}。可选格式：{', '.join(FORMATS)}")

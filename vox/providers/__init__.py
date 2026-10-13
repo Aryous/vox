@@ -20,7 +20,7 @@ def engine_for(model: dict) -> CloudEngine:
     e = _live.get(model["id"])
     if e is None or e.m is not model:   # 目录重建后模型字典换了，适配器跟着换
         if model.get("adapter") not in ADAPTERS:
-            raise ProviderError(f"{model['id']} 需要的适配器 {model.get('adapter')} 在这个版本里没有，请升级 vox")
+            raise ProviderError(f"{model['id']} 需要的适配器 {model.get('adapter')} 不在当前版本中，请升级 vox")
         e = _live[model["id"]] = ADAPTERS[model["adapter"]](model)
     return e
 

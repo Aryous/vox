@@ -1,9 +1,9 @@
 """vox：语音合成（TTS）与语音识别（STT）命令行。与 WebUI / HTTP API 共用同一套模型 ID、音色引用和参数名；所有命令都支持 --json。
 
-  vox models                      我的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家；--task stt 只看识别模型
+  vox models                      已添加的模型（能直接用的）；--all 含未下载、未连接的；-p gemini 只看一家；--task stt 只看识别模型
   vox models fetch openrouter     在线查询这家现在提供的模型（local = HuggingFace）
-  vox models add qwen3            加进我的模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
-  vox models rm <模型 ID>          移出我的模型（本地要加 --delete-files，会删除模型文件）
+  vox models add qwen3            添加模型：本地 = 下载，云端 = 加入清单；未登记的写 provider/模型名
+  vox models rm <模型 ID>          移除模型（本地要加 --delete-files，会删除模型文件）
   vox models update               拉取新版模型注册表（只是数据，不含代码）
   vox voices -m qwen3             音色库
   vox sample qwen3:serena --play  试听音色样本
@@ -119,10 +119,10 @@ def cmd_models(a):
     hub = _hub()
     act, tgt = a.action or "list", a.target
     if act in ("fetch", "add", "rm") and not tgt:
-        raise SystemExit(f"vox models {act} 需要参数，例如 " + {"fetch": "vox models fetch openrouter", "add": "vox models add qwen3", "rm": "vox models rm openai/gpt-4o-mini-tts"}[act])
+        raise SystemExit(f"vox models {act} 缺少参数，例如 " + {"fetch": "vox models fetch openrouter", "add": "vox models add qwen3", "rm": "vox models rm openai/gpt-4o-mini-tts"}[act])
     if act == "fetch":
         r = _server("/api/providers/discover", {"provider": tgt}) or _call(hub.discover, tgt)
-        return _out(a, r, lambda: [print(f"✓ 查到 {r['found']} 个模型"), _print_models(r["models"])])
+        return _out(a, r, lambda: [print(f"✓ 查询到 {r['found']} 个模型"), _print_models(r["models"])])
     if act == "add":
         m = hub.catalog.find_model(tgt)
         if m and m["provider"] == "local" and _server("/api/status") is None:   # 没有服务在跑：本进程前台下载
@@ -130,17 +130,17 @@ def cmd_models(a):
         task = a.task or "tts"   # 只在手动添加未登记的云端模型时有意义：说明它是合成还是识别模型
         r = _server("/api/models/add", {"model": tgt, "name": a.name, "task": task}) or _call(hub.add_model, tgt, name=a.name, task=task)
         if r.get("state"):   # 本地模型：开始下载
-            return _out(a, r, lambda: print(f"↓ 开始下载 {r['model']}；进度：vox status，或在 WebUI 模型页查看"))
-        return _out(a, r, lambda: print(f"✓ 已加进我的模型：{r['model']}"))
+            return _out(a, r, lambda: print(f"↓ 开始下载 {r['model']}。查看进度：vox status，或网页「模型」页"))
+        return _out(a, r, lambda: print(f"✓ 已添加：{r['model']}"))
     if act == "rm":
         r = _server("/api/models/remove", {"model": tgt, "delete_files": a.delete_files}) or _call(hub.remove_model, tgt, a.delete_files)
-        return _out(a, r, lambda: print(f"✓ 已移出我的模型：{r['model']}" + (f"（已删除 {r['deleted']}）" if r.get("deleted") else "")))
+        return _out(a, r, lambda: print(f"✓ 已移除：{r['model']}" + (f"（已删除 {r['deleted']}）" if r.get("deleted") else "")))
     if act == "update":
         r = _server("/api/registry/update", {"url": tgt}) or _call(hub.registry_update, tgt)
         return _out(a, r, lambda: print(f"{'✓ 已更新' if r['changed'] else '已是最新'}：注册表 {r['updated']}（{r['providers']} 家 Provider，{r['models']} 个登记模型）"))
     qs = "&".join(x for x in (f"provider={a.provider}" if a.provider else "", "" if a.all else "mine=1", f"task={a.task}" if a.task else "") if x)
     ms = _server("/api/models?" + qs) or hub.models(a.provider, None if a.all else True, a.task)
-    _out(a, ms, lambda: _print_models(ms) if ms else print("我的模型是空的。vox models --all 查看可以下载 / 添加的模型"))
+    _out(a, ms, lambda: _print_models(ms) if ms else print("尚未添加模型。查看可下载或添加的模型：vox models --all"))
 
 
 def _call(fn, *args, **kw):
@@ -172,7 +172,7 @@ def cmd_pull(a):
 def cmd_load(a, unload=False):
     r = _server("/api/models/" + ("unload" if unload else "load"), {"model": a.model})
     if r is None:
-        raise SystemExit("load / unload 作用于正在运行的 vox 服务：先运行 vox serve")
+        raise SystemExit("load / unload 作用于正在运行的 vox 服务，请先运行 vox serve")
     _out(a, r, lambda: print(f"✓ {r['model']} {STATUS_LABEL.get(r['status'], r['status'])}" + (f"（{r['seconds']}s）" if r.get("seconds") else "")))
 
 
@@ -243,11 +243,11 @@ def cmd_transcribe(a):
 
     fmt = a.format or (Path(a.output).suffix.lstrip(".").lower() if a.output and not Path(a.output).is_dir() else "") or "txt"
     if fmt not in stt.FORMATS:
-        raise SystemExit(f"✗ 不支持的格式 {fmt}，可选：{', '.join(stt.FORMATS)}")
+        raise SystemExit(f"✗ 不支持的格式 {fmt}。可选格式：{', '.join(stt.FORMATS)}")
     files = [Path(f).expanduser() for f in a.files]
     many = len(files) > 1
     if many and a.output and not Path(a.output).is_dir():
-        raise SystemExit("✗ 多个文件时 -o 要写一个目录")
+        raise SystemExit("✗ 处理多个文件时，-o 须指定一个目录")
     req = {"model": a.model, "language": a.language, "prompt": a.prompt, "hotwords": a.hotwords, "words": a.words, "diarize": a.diarize}
     results = []
     for f in files:
@@ -281,14 +281,14 @@ def cmd_transcripts(a):
         return _out(a, r, lambda: print(f"✓ 已删除 {r['id']}"))
     rs = _server(f"/api/transcripts?limit={a.limit}") or stt.records(a.limit)
     _out(a, rs, lambda: [print(f"{r['id']}  {_pad(r['request']['model'], 32)} {r['duration'] or 0:7.1f}s  {_pad(r['file'][:20], 22)}  {r['preview'][:40]}") for r in rs]
-         if rs else print("还没有转写记录。vox transcribe <音频文件>"))
+         if rs else print("暂无转写记录。开始转写：vox transcribe <音频文件>"))
 
 
 def cmd_clones(a):
     hub = _hub()
     if a.action == "add":
         if not a.target:
-            raise SystemExit("✗ 用法：vox clones add <录音文件> -n 名字 [-m 首选模型] [--text 文字稿] [--consent 同意声明录音]")
+            raise SystemExit("✗ 用法：vox clones add <录音文件> -n 名称 [-m 首选模型] [--text 文字稿] [--consent 同意声明录音]")
         f = Path(a.target).expanduser()
         if not f.is_file():
             raise SystemExit(f"✗ 找不到文件：{f}")
@@ -296,7 +296,7 @@ def cmd_clones(a):
         fields = {"name": a.name, "text": a.text, "lang": a.lang, "model": a.model}
         r = _server_upload("/api/clones", f, fields, {"consent": consent}) or _call(hub.create_clone, f, a.name or "", text=a.text, lang=a.lang, consent=consent,
                                                                                    filename=f.name, model=a.model)
-        return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}  {r['duration']}s\n  文字稿{'（自动识别，可用 vox clones edit 修改）' if r.get('text_auto') else ''}：{r['text'] or '（空：没有本地识别模型，建议用 --text 补上，克隆会更像）'}\n"
+        return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}  {r['duration']}s\n  文字稿{'（自动识别生成，可通过 vox clones edit 修改）' if r.get('text_auto') else ''}：{r['text'] or '（空：未安装本地识别模型。建议通过 --text 提供文字稿以提升克隆效果）'}\n"
                                          f"  用法：vox say \"你好\" -v clone:{r['id']}"))
     if a.action == "edit":
         consent = Path(a.consent).expanduser() if a.consent else None
@@ -308,13 +308,13 @@ def cmd_clones(a):
         return _out(a, r, lambda: print(f"✓ clone:{r['id']}  {r['name']}：{r['text']}"))
     if a.action == "rm":
         r = _server("/api/clones/delete", {"id": a.target}) or _call(hub.delete_clone, a.target or "")
-        return _out(a, r, lambda: print(f"✓ 已删除 clone:{r['id']}" + "".join(f"\n  ⚠ 云端没删掉：{x}" for x in r.get("remote_failed", []))))
+        return _out(a, r, lambda: print(f"✓ 已删除 clone:{r['id']}" + "".join(f"\n  ⚠ 云端音色未能删除：{x}" for x in r.get("remote_failed", []))))
     from . import clones
 
     rs = _server("/api/clones") or clones.records()
     _out(a, rs, lambda: [print(f"clone:{_pad(r['id'], 16)} {_pad(r['name'], 12)} {r['duration']:5.1f}s  {(r.get('text') or '（无文字稿）')[:36]}"
                                + (f"  已上传：{'、'.join(r['remote'])}" if r.get("remote") else "")) for r in rs]
-         if rs else print("还没有克隆音色。vox clones add 录音.m4a -n 名字（建议 10–20 秒、一个人、没有背景音乐）"))
+         if rs else print("暂无克隆音色。创建：vox clones add 录音.m4a -n 名称（建议使用 10–20 秒、无背景音乐的单人人声）"))
 
 
 def cmd_presets(a):
@@ -324,7 +324,7 @@ def cmd_presets(a):
         return _out(a, r, lambda: print(f"✓ 已删除 preset:{a.id}"))
     rs = _server("/api/presets") or hub.presets()
     _out(a, rs, lambda: [print(f"preset:{_pad(r['id'], 16)} {_pad(r['name'], 12)} {r.get('model')}  {r.get('voice') or '-'}  {r.get('instructions') or ''}") for r in rs]
-         if rs else print("还没有预设。在 WebUI 试音台调好后点「存为预设」"))
+         if rs else print("暂无预设。可在网页试音台中选择「存为预设」创建"))
 
 
 def cmd_history(a):
@@ -337,7 +337,7 @@ def cmd_status(a):
     running = s is not None
     s = s or _hub().status()
     _out(a, {**s, "server": SERVER if running else None},
-         lambda: print(f"服务：{SERVER if running else '未运行（vox serve 启动）'}\n已加载：{', '.join(s['loaded']) or '无'}\n内存：{_fmt_size(s['memory_bytes'])}\n读音校对：{'可用' if s['asr'] else '不可用（需要 coli）'}\n数据目录：{s['home']}"))
+         lambda: print(f"服务：{SERVER if running else '未运行（启动：vox serve）'}\n已加载：{', '.join(s['loaded']) or '无'}\n内存：{_fmt_size(s['memory_bytes'])}\n读音校对：{'可用' if s['asr'] else '不可用（需要本地识别模型）'}\n数据目录：{s['home']}"))
 
 
 # ---------- 批量 ----------
@@ -411,7 +411,7 @@ def cmd_keys(a):
                     print(f"{'':<12} 申请：{p['console']}")
         return _out(a, ps, human)
     if not a.env:
-        raise SystemExit("需要凭证名，例如 vox keys set OPENAI_API_KEY（vox keys list 查看全部）")
+        raise SystemExit("缺少凭证名，例如 vox keys set OPENAI_API_KEY（查看全部：vox keys list）")
     if a.action == "set":
         value = a.value
         if value is None:
@@ -422,9 +422,9 @@ def cmd_keys(a):
             else:
                 value = sys.stdin.read().strip()
         r = hub.set_key(a.env, value)
-        return _out(a, r, lambda: print(f"✓ 已保存到 {__import__('vox.credentials', fromlist=['PATH']).PATH}（权限 600）" + ("；注意：同名环境变量已设置，会优先生效" if r["source"] == "env" else "")))
+        return _out(a, r, lambda: print(f"✓ 已保存到 {__import__('vox.credentials', fromlist=['PATH']).PATH}（权限 600）" + ("；注意：已设置同名环境变量，将优先生效" if r["source"] == "env" else "")))
     r = hub.delete_key(a.env)
-    _out(a, r, lambda: print(f"✓ 已从配置文件删除 {a.env}" + ("（环境变量里仍有值）" if r["configured"] else "")))
+    _out(a, r, lambda: print(f"✓ 已从配置文件删除 {a.env}" + ("（环境变量中仍有值）" if r["configured"] else "")))
 
 
 def cmd_providers(a):
@@ -437,20 +437,20 @@ def cmd_providers(a):
             for p in ps:
                 where = p.get("base_url") or ("本机" if p["kind"] == "local" else p.get("region", ""))
                 state = "本机" if p["kind"] == "local" else "已连接" if p["connected"] else "未连接"
-                print(f"{_pad(p['id'], 14)} {_pad(p['name'], 16)} {_pad(state, 7)} 我的模型 {_pad(f"{p['mine']}/{p['count']}", 6)} {'自定义 · ' if p.get('custom') else ''}{where}")
+                print(f"{_pad(p['id'], 14)} {_pad(p['name'], 16)} {_pad(state, 7)} 已添加 {_pad(f"{p['mine']}/{p['count']}", 6)} {'自定义 · ' if p.get('custom') else ''}{where}")
         return _out(a, ps, human)
     if not a.id:
-        raise SystemExit(f"vox providers {act} 需要 Provider ID，例如 vox providers {act} my-kokoro")
+        raise SystemExit(f"vox providers {act} 缺少 Provider ID，例如 vox providers {act} my-kokoro")
     if act == "rm":
         r = _server("/api/providers/remove", {"id": a.id}) or _call(hub.provider_remove, a.id)
-        return _out(a, r, lambda: print(f"✓ 已删除自定义 Provider {a.id}（连同它在我的模型里的条目和保存的 Key）"))
+        return _out(a, r, lambda: print(f"✓ 已删除自定义 Provider {a.id}，其已添加的模型和保存的 Key 已一并删除"))
     if act == "test" and not a.base_url:
         r = _server("/api/providers/test", {"id": a.id}) or _call(hub.provider_test, None, a.id)
         return _out(a, r, lambda: _print_test(r))
     # add / edit：edit 在原配置上改；没给的选项保持不变
     cur = {} if act == "add" else ((hub.catalog.PROVIDERS.get(a.id) or {}).get("config") or {})
     if act == "edit" and not cur:
-        raise SystemExit(f"没有叫 {a.id} 的自定义 Provider")
+        raise SystemExit(f"自定义 Provider {a.id} 不存在")
     cfg = {**cur, **{k: v for k, v in {"name": a.name, "base_url": a.base_url, "instructions": a.instructions, "voices": a.voices,
                                         "model_filter": a.model_filter}.items() if v is not None}}
     for flag, key in (("no_key", "auth"), ("no_native_speed", "native_speed"), ("no_fetch_voices", "fetch_voices")):
@@ -473,11 +473,11 @@ def cmd_providers(a):
     def human():
         print(f"✓ 已{'保存' if act == 'edit' else '添加'}自定义 Provider {r['provider']}")
         if r.get("key_env") and not r["connected"]:
-            print(f"  还没有 Key：vox keys set {r['key_env']}")
+            print(f"  尚未配置 Key：vox keys set {r['key_env']}")
         if r.get("found") is not None:
-            print(f"  查到 {r['found']} 个模型；vox models -p {r['provider']} --all 查看，vox models add {r['provider']}/<模型> 加进我的模型")
+            print(f"  查询到 {r['found']} 个模型。查看：vox models -p {r['provider']} --all；添加：vox models add {r['provider']}/<模型>")
         if r.get("error"):
-            print(f"  查询模型列表失败：{r['error']}（可以手动添加：vox models add {r['provider']}/<模型>）")
+            print(f"  模型列表查询失败：{r['error']}。可手动添加：vox models add {r['provider']}/<模型>")
     _out(a, r, human)
 
 
@@ -491,7 +491,7 @@ def _pad(s, w):
 
 def _print_test(r):
     if r["ok"]:
-        print(f"✓ 连得上 {r['base_url']}：{len(r['models'])} 个模型" + (f"，{r['voices']} 个音色" if r.get("voices") is not None else "，没有音色列表接口（可以手动填音色）"))
+        print(f"✓ 已连接 {r['base_url']}：{len(r['models'])} 个模型" + (f"，{r['voices']} 个音色" if r.get("voices") is not None else "，未提供音色列表接口（可手动填写音色）"))
         for m in r["models"][:20]:
             print(f"  {m}")
     else:
@@ -514,14 +514,14 @@ def main(argv=None):
         sp.add_argument("--json", action="store_true", help="输出 JSON（给脚本和 Agent）")
         return sp
 
-    s = J(sub.add_parser("models", help="我的模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
+    s = J(sub.add_parser("models", help="模型：list / fetch <provider> / add <模型> / rm <模型> / update"))
     s.add_argument("action", nargs="?", choices=["list", "fetch", "add", "rm", "update"])
     s.add_argument("target", nargs="?", help="Provider（fetch）、模型 ID（add / rm）或注册表地址（update）")
-    s.add_argument("-p", "--provider", help="只看某一家")
-    s.add_argument("--all", action="store_true", help="也列出还不能用的（未下载、未连接、未添加）")
-    s.add_argument("--name", help="手动添加时的显示名")
+    s.add_argument("-p", "--provider", help="仅显示指定 Provider")
+    s.add_argument("--all", action="store_true", help="同时列出不可用的模型（未下载、未连接、未添加）")
+    s.add_argument("--name", help="手动添加时的显示名称")
     s.add_argument("--delete-files", action="store_true", help="rm 本地模型时确认删除已下载的文件")
-    s.add_argument("--task", choices=["tts", "stt"], help="只看合成（tts）或识别（stt）模型；add 未登记的云端模型时说明它是哪一类")
+    s.add_argument("--task", choices=["tts", "stt"], help="仅显示合成（tts）或识别（stt）模型；add 未登记的云端模型时用于指定类型")
     s.set_defaults(fn=cmd_models)
     s = J(sub.add_parser("pull", help="下载模型（ModelScope，按 HuggingFace 哈希校验）"))
     s.add_argument("model", help="模型 ID，如 qwen3、qwen3-design")
@@ -550,34 +550,34 @@ def main(argv=None):
     s.add_argument("-v", "--voice", help="音色，如 serena；也可写引用 qwen3:serena / preset:<id> / clone:<id>（克隆音色，不写 -m 时用默认的克隆模型）")
     s.add_argument("-i", "--instructions", dest="instructions", help="情绪 / 语气；声音设计模型里是声音描述")
     s.add_argument("-s", "--speed", type=float, help="语速 0.25–4")
-    s.add_argument("--seed", type=int, help="随机种子（Qwen3 可复现）；不填则随机并记录")
-    s.add_argument("--no-cache", action="store_true", help="不用缓存，重新合成（不支持种子的云端模型用它再来一条）")
-    s.add_argument("--accept-fee", action="store_true", help="同意收费：第一次在会收费的云端（如 MiniMax）用克隆音色时需要")
+    s.add_argument("--seed", type=int, help="随机种子（Qwen3 支持复现）；不填时随机生成并记录")
+    s.add_argument("--no-cache", action="store_true", help="跳过缓存重新合成（适用于不支持种子的云端模型）")
+    s.add_argument("--accept-fee", action="store_true", help="同意收费：首次在收费的云端服务（如 MiniMax）使用克隆音色时需要")
     s.add_argument("-l", "--lang", help="语言，如 chinese、english、auto")
     for k, t in (("temperature", float), ("top_p", float), ("top_k", int), ("repetition_penalty", float)):
         s.add_argument("--" + k.replace("_", "-"), dest=k, type=t)
-    s.add_argument("-o", "--output", help="输出文件（.wav / .mp3 / .flac / .opus / .aac）；不填则留在 vox 数据目录")
+    s.add_argument("-o", "--output", help="输出文件（.wav / .mp3 / .flac / .opus / .aac）；不填时保存在 vox 数据目录")
     s.add_argument("--play", action="store_true", help="合成后播放")
-    s.add_argument("--local", action="store_true", help="不走运行中的服务，在本进程合成")
+    s.add_argument("--local", action="store_true", help="不经过运行中的服务，在当前进程合成")
     s.set_defaults(fn=cmd_say)
 
     s = J(sub.add_parser("history", help="合成历史（与 WebUI 共享）"))
     s.add_argument("-n", "--limit", type=int, default=20)
-    s.add_argument("--star", action="store_true", help="只看收藏")
+    s.add_argument("--star", action="store_true", help="仅显示收藏")
     s.set_defaults(fn=cmd_history)
 
     s = J(sub.add_parser("transcribe", help="语音识别：音频 / 视频 → 文字或字幕"))
-    s.add_argument("files", nargs="+", help="音频或视频文件（ffmpeg 能读的都行）")
-    s.add_argument("-m", "--model", help="识别模型，如 qwen3-asr、whisper-turbo、openai/gpt-transcribe；不填用默认")
+    s.add_argument("files", nargs="+", help="音频或视频文件（支持 ffmpeg 可读取的格式）")
+    s.add_argument("-m", "--model", help="识别模型，如 qwen3-asr、whisper-turbo、openai/gpt-transcribe；不填时使用默认模型")
     s.add_argument("-l", "--language", help="语种提示，如 zh、en；不填自动识别")
-    s.add_argument("--prompt", help="上下文提示（专有名词、前文），模型支持时才传")
-    s.add_argument("--hotwords", help="热词，逗号分隔，模型支持时才传")
-    s.add_argument("--words", action="store_true", help="要逐词时间戳（模型要支持）")
-    s.add_argument("--diarize", action="store_true", help="区分说话人（模型要支持）")
-    s.add_argument("-f", "--format", choices=["txt", "srt", "vtt", "json"], help="输出格式；不填按 -o 的扩展名，默认 txt")
-    s.add_argument("-o", "--output", help="输出文件；多个输入时写一个目录")
-    s.add_argument("--no-cache", action="store_true", help="不用缓存，重新识别")
-    s.add_argument("--local", action="store_true", help="不走运行中的服务，在本进程识别")
+    s.add_argument("--prompt", help="上下文提示（专有名词、前文），仅在模型支持时传递")
+    s.add_argument("--hotwords", help="热词，以逗号分隔，仅在模型支持时传递")
+    s.add_argument("--words", action="store_true", help="输出逐词时间戳（需模型支持）")
+    s.add_argument("--diarize", action="store_true", help="区分说话人（需模型支持）")
+    s.add_argument("-f", "--format", choices=["txt", "srt", "vtt", "json"], help="输出格式；不填时按 -o 的扩展名判断，默认 txt")
+    s.add_argument("-o", "--output", help="输出文件；多个输入时须指定目录")
+    s.add_argument("--no-cache", action="store_true", help="跳过缓存重新识别")
+    s.add_argument("--local", action="store_true", help="不经过运行中的服务，在当前进程识别")
     s.set_defaults(fn=cmd_transcribe)
     s = J(sub.add_parser("transcripts", help="转写记录：list / show <id> / rm <id>"))
     s.add_argument("action", nargs="?", choices=["list", "show", "rm"], default="list")
@@ -588,14 +588,14 @@ def main(argv=None):
 
     s = J(sub.add_parser("clones", help="克隆音色：list / add <录音> / edit <id> / rm <id>"))
     s.add_argument("action", nargs="?", choices=["list", "add", "edit", "rm"], default="list")
-    s.add_argument("target", nargs="?", help="add 时是录音文件，edit / rm 时是克隆音色 ID")
-    s.add_argument("-n", "--name", help="名字")
-    s.add_argument("--text", help="录音的文字稿；add 时不填就用本地识别模型自动生成")
+    s.add_argument("target", nargs="?", help="add 时为录音文件，edit / rm 时为克隆音色 ID")
+    s.add_argument("-n", "--name", help="名称")
+    s.add_argument("--text", help="录音的文字稿；add 时不填则由本地识别模型自动生成")
     s.add_argument("--lang", help="录音的语种，如 zh、en")
-    s.add_argument("-m", "--model", help="首选模型（试听和不写 -m 时用它），如 qwen3-clone、gemini/gemini-3.8-flash-tts；不填用默认的克隆模型")
-    s.add_argument("--consent", help="同意声明录音（Gemini 等云端克隆要求本人朗读一段规定的话）")
+    s.add_argument("-m", "--model", help="首选模型（用于试听及未指定 -m 时），如 qwen3-clone、gemini/gemini-3.8-flash-tts；不填时使用默认克隆模型")
+    s.add_argument("--consent", help="同意声明录音（Gemini 等云端克隆服务要求本人朗读指定内容）")
     s.set_defaults(fn=cmd_clones)
-    s = J(sub.add_parser("presets", help="我的预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))
+    s = J(sub.add_parser("presets", help="预设（音色 + 语气 + 语速 + 种子）：list / rm <id>"))
     s.add_argument("action", nargs="?", choices=["list", "rm"], default="list")
     s.add_argument("id", nargs="?")
     s.set_defaults(fn=cmd_presets)
@@ -606,16 +606,16 @@ def main(argv=None):
     s.add_argument("script")
     s.add_argument("-o", "--output", help="输出目录，默认脚本旁的 vo/")
     s.add_argument("-f", "--format", default="mp3", choices=["mp3", "wav", "flac"])
-    s.add_argument("-m", "--model", help="强制所有台词用这个模型")
-    s.add_argument("--only", help="只合成这些条目，逗号分隔")
-    s.add_argument("--seed", type=int, help="没写种子的台词用这个种子")
+    s.add_argument("-m", "--model", help="所有台词统一使用该模型")
+    s.add_argument("--only", help="仅合成指定条目，以逗号分隔")
+    s.add_argument("--seed", type=int, help="为未指定种子的台词使用该种子")
     s.add_argument("--force", action="store_true", help="忽略缓存全部重做")
     s.set_defaults(fn=cmd_batch)
 
     s = J(sub.add_parser("keys", help="云端 Provider 的凭证：list / set / rm（环境变量优先，其次 ~/.config/vox/credentials.json）"))
     s.add_argument("action", choices=["list", "set", "rm"])
     s.add_argument("env", nargs="?", help="凭证名，如 OPENAI_API_KEY")
-    s.add_argument("--value", help="直接给值（会留在 shell 历史里；推荐不填，交互输入或从管道读）")
+    s.add_argument("--value", help="直接提供值（会保留在 shell 历史中；建议改用交互输入或管道）")
     s.set_defaults(fn=cmd_keys)
 
     s = J(sub.add_parser("providers", help="Provider：list / add / edit / rm / test（自定义 Provider 用 OpenAI 兼容接口接入）"))
@@ -623,12 +623,12 @@ def main(argv=None):
     s.add_argument("id", nargs="?", help="Provider ID，如 my-kokoro")
     s.add_argument("--base-url", help="如 http://127.0.0.1:8880/v1（POST {base}/audio/speech）")
     s.add_argument("--name", help="显示名")
-    s.add_argument("--no-key", action="store_true", help="这个服务不需要 Key（本机自建常见）")
-    s.add_argument("--instructions", choices=["instructions", "instruction", "prefix", "none"], help="情绪指令怎么传，默认 instructions")
+    s.add_argument("--no-key", action="store_true", help="该服务无需 Key（常见于本机自建服务）")
+    s.add_argument("--instructions", choices=["instructions", "instruction", "prefix", "none"], help="情绪指令的传递方式，默认 instructions")
     s.add_argument("--no-native-speed", action="store_true", help="服务不支持 speed，改由 ffmpeg 变速")
     s.add_argument("--voices", help="手动指定音色，逗号分隔")
-    s.add_argument("--no-fetch-voices", action="store_true", help="不去 {base}/audio/voices 拉音色列表")
-    s.add_argument("--model-filter", help="在线模型列表只保留名字含这个词的")
+    s.add_argument("--no-fetch-voices", action="store_true", help="不从 {base}/audio/voices 获取音色列表")
+    s.add_argument("--model-filter", help="在线模型列表仅保留名称包含该关键词的模型")
     s.set_defaults(fn=cmd_providers)
 
     s = sub.add_parser("serve", help="启动本地服务：WebUI + OpenAI 兼容 API")
